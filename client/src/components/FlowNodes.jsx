@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Zap, UserPlus, Eye, ThumbsUp, Award, MessageCircle, MessageSquare, Clock, XCircle, UserMinus, AlertCircle, Send } from 'lucide-react';
+import { Zap, UserPlus, Eye, ThumbsUp, Award, MessageCircle, MessageSquare, Clock, XCircle, UserMinus, AlertCircle, Send, Plus } from 'lucide-react';
 
 const ACTION_TYPES = {
   send_invite: { label: 'Send Invite', icon: UserPlus, color: '#6366f1' },
@@ -14,7 +14,7 @@ const ACTION_TYPES = {
   end: { label: 'End', icon: XCircle, color: '#6b7280', isTerminal: true }
 };
 
-export const StartNode = memo(({ data }) => (
+export const StartNode = memo(({ id, data }) => (
   <div className="relative p-4 rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/20 to-accent/10 backdrop-blur-md min-w-[140px] shadow-lg shadow-primary/5">
     <div className="flex items-center gap-3">
       <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center shrink-0">
@@ -25,11 +25,20 @@ export const StartNode = memo(({ data }) => (
         <div className="text-[10px] text-text-muted">Campaign Entry</div>
       </div>
     </div>
-    <Handle type="source" position={Position.Bottom} className="!bg-primary !w-3 !h-3 !-bottom-1.5" />
+    <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center">
+      <Handle type="source" position={Position.Bottom} className="!bg-primary/60 !w-3 !h-3 border-none shadow-glow" />
+      <button 
+        onClick={(e) => { e.stopPropagation(); data.onAdd?.(id); }}
+        className="mt-2 w-6 h-6 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center text-primary-light hover:bg-primary/40 hover:scale-110 transition-all shadow-lg backdrop-blur-md z-10"
+        title="Add next step"
+      >
+        <Plus className="w-4 h-4" />
+      </button>
+    </div>
   </div>
 ));
 
-export const ActionNode = memo(({ data, selected }) => {
+export const ActionNode = memo(({ id, data, selected }) => {
   const typeDef = ACTION_TYPES[data.type];
   const Icon = typeDef?.icon || Zap;
   
@@ -57,13 +66,22 @@ export const ActionNode = memo(({ data, selected }) => {
       </div>
 
       {!typeDef?.isTerminal && (
-        <Handle type="source" position={Position.Bottom} className="!bg-primary/40 !w-2 !h-2 !-bottom-1 border-none" />
+        <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center">
+          <Handle type="source" position={Position.Bottom} className="!bg-primary/40 !w-2 !h-2 border-none" />
+          <button 
+            onClick={(e) => { e.stopPropagation(); data.onAdd?.(id); }}
+            className="mt-2 w-6 h-6 rounded-full bg-primary/20 border border-primary/40 flex items-center justify-center text-primary-light hover:bg-primary/40 hover:scale-110 transition-all shadow-lg backdrop-blur-md z-10"
+            title="Add next step"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+        </div>
       )}
     </div>
   );
 });
 
-export const ConditionNode = memo(({ data, selected }) => {
+export const ConditionNode = memo(({ id, data, selected }) => {
   const typeDef = ACTION_TYPES[data.type];
   const Icon = typeDef?.icon || Zap;
   
@@ -92,10 +110,24 @@ export const ConditionNode = memo(({ data, selected }) => {
         <div className="relative flex flex-col items-center group/yes">
             <span className="text-[9px] font-black text-success/60 group-hover/yes:text-success transition-colors mb-1 tracking-tighter">YES</span>
             <Handle type="source" position={Position.Bottom} id="yes" className="!bg-success/50 !w-2 !h-2 !-bottom-1 static border-none" />
+            <button 
+              onClick={(e) => { e.stopPropagation(); data.onAdd?.(id, 'yes'); }}
+              className="mt-2 w-5 h-5 rounded-full bg-success/20 border border-success/30 flex items-center justify-center text-success hover:bg-success/40 transition-all shadow-lg backdrop-blur-md z-10"
+              title="Add 'YES' step"
+            >
+              <Plus className="w-3 h-3" />
+            </button>
         </div>
         <div className="relative flex flex-col items-center group/no">
             <span className="text-[9px] font-black text-danger/60 group-hover/no:text-danger transition-colors mb-1 tracking-tighter">NO</span>
             <Handle type="source" position={Position.Bottom} id="no" className="!bg-danger/50 !w-2 !h-2 !-bottom-1 static border-none" />
+            <button 
+              onClick={(e) => { e.stopPropagation(); data.onAdd?.(id, 'no'); }}
+              className="mt-2 w-5 h-5 rounded-full bg-danger/20 border border-danger/30 flex items-center justify-center text-danger hover:bg-danger/40 transition-all shadow-lg backdrop-blur-md z-10"
+              title="Add 'NO' step"
+            >
+              <Plus className="w-3 h-3" />
+            </button>
         </div>
       </div>
     </div>

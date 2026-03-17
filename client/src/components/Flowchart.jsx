@@ -23,20 +23,28 @@ export default function Flowchart({
   onNodesChange, 
   onEdgesChange, 
   onConnect, 
-  onDrop, 
-  onDragOver, 
+  onRequestAdd, 
   onNodeSelect 
 }) {
+  // Inject the callback into all nodes so they can trigger the picker
+  const nodesWithCallbacks = React.useMemo(() => 
+    nodes.map(n => ({
+      ...n,
+      data: {
+        ...n.data,
+        onAdd: onRequestAdd
+      }
+    })), [nodes, onRequestAdd]
+  );
+
   return (
     <div className="w-full h-full min-h-[600px] bg-bg-primary/20 rounded-2xl overflow-hidden border border-white/5 relative group/flow">
       <ReactFlow
-        nodes={nodes}
+        nodes={nodesWithCallbacks}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
-        onDrop={onDrop}
-        onDragOver={onDragOver}
         onNodeClick={(e, n) => onNodeSelect(n.id)}
         nodeTypes={nodeTypes}
         fitView

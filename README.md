@@ -8,6 +8,7 @@ AutoReach is a professional-grade LinkedIn automation tool designed to streamlin
 
 ### 🛠️ Strategic Campaign Builder
 - **React Flow Native Architecture**: A robust, draggable, and zoomable flowchart interface.
+- **Guided Node Addition**: Add steps by clicking (+) buttons on nodes and selecting from a premium Action Picker.
 - **Hierarchical Auto-Layout**: Symmetric middle alignment using the Dagre layout engine.
 - **Orthogonal Edge Design**: Clean, straight-line connections for a professional flowchart look.
 - **Glassmorphism UI**: Premium, modern aesthetics with vibrant gradients and subtle shadows.

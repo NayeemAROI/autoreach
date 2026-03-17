@@ -309,59 +309,29 @@ function ConfigPanel({ node, onUpdateConfig, onClose, onRemove }) {
 }
 
 
-// ─── Flowchart Wrapper to access ReactFlow Hooks ───
-const FlowWrapper = ({ nodes, edges, onNodesChange, onEdgesChange, onConnect, onNodeSelect, setNodes }) => {
-  const { screenToFlowPosition } = useReactFlow();
-
-  const onDragOver = useCallback((event) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-  }, []);
-
-  const onDrop = useCallback((event) => {
-    event.preventDefault();
-    const type = event.dataTransfer.getData('application/reactflow');
-    if (!type) return;
-
-    const position = screenToFlowPosition({
-      x: event.clientX,
-      y: event.clientY,
-    });
-
-    const newId = `node_${Date.now()}`;
-    const isCondition = type === 'send_invite' || type === 'send_message';
-
-    const newNode = {
-      id: newId,
-      type: isCondition ? 'condition' : 'action',
-      position,
-      data: { 
-        id: newId, 
-        type, 
-        config: {}, 
-        yesChild: null, 
-        noChild: null,
-        conditionLabel: isCondition ? (type === 'send_invite' ? 'Invite Accepted?' : 'Replied?') : null
-      },
-    };
-
-    setNodes((nds) => nds.concat(newNode));
-    onNodeSelect(newId);
-  }, [screenToFlowPosition, setNodes, onNodeSelect]);
-
+const FlowWrapper = ({ 
+  nodes, 
+  edges, 
+  onNodesChange, 
+  onEdgesChange, 
+  onConnect, 
+  onRequestAdd, 
+  onNodeSelect 
+}) => {
   return (
-    <Flowchart 
-      nodes={nodes}
-      edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onConnect={onConnect}
-      onDrop={onDrop}
-      onDragOver={onDragOver}
-      onNodeSelect={onNodeSelect}
-    />
-  );
-};
+    <div className="w-full h-full relative">
+      <Flowchart 
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onRequestAdd={onRequestAdd}
+        onNodeSelect={onNodeSelect}
+      />
+    </div>
+  )
+}
 
 // ─── Main CampaignBuilder Component ───
 export default function CampaignBuilder() {
@@ -376,8 +346,8 @@ export default function CampaignBuilder() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState(null)
-  const [showPicker, setShowPicker] = useState(null)
   const [nodeIdToRemove, setNodeIdToRemove] = useState(null)
+  const [showPicker, setShowPicker] = useState(null) // { parentId, branch }
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const lastSyncedTreeRef = useRef(null)
@@ -433,6 +403,52 @@ export default function CampaignBuilder() {
       style: { stroke: params.sourceHandle === 'no' ? '#ef4444' : (params.sourceHandle === 'yes' ? '#10b981' : '#6366f1'), strokeWidth: 2.5 },
     }, eds))
   }, [setEdges])
+
+  const handleRequestAdd = useCallback((parentId, branch = null) => {
+    setShowPicker({ parentId, branch })
+  }, [])
+
+  const handleSelectAction = useCallback((actionType) => {
+    if (!showPicker) return
+    const { parentId, branch } = showPicker
+    
+    const parentNode = nodes.find(n => n.id === parentId)
+    const typeDef = ACTION_TYPES[actionType]
+    const newId = `node_${Date.now()}`
+    
+    const newNode = {
+      id: newId,
+      type: typeDef.hasBranching ? 'condition' : 'action',
+      position: parentNode ? { x: parentNode.position.x, y: parentNode.position.y + 200 } : { x: 250, y: 150 },
+      data: { 
+        type: actionType, 
+        label: typeDef.label,
+        config: {},
+      },
+    }
+
+    const newEdge = {
+      id: `e-${parentId}-${newId}`,
+      source: parentId,
+      target: newId,
+      sourceHandle: branch || null,
+      type: 'smoothstep',
+      pathOptions: { borderRadius: 0 },
+      label: branch === 'yes' ? 'YES' : (branch === 'no' ? 'NO' : null),
+      labelStyle: { fill: branch === 'no' ? '#ef4444' : (branch === 'yes' ? '#10b981' : '#6366f1'), fontWeight: 800, fontSize: 10 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: branch === 'no' ? '#ef4444' : (branch === 'yes' ? '#10b981' : '#6366f1') },
+      style: { stroke: branch === 'no' ? '#ef4444' : (branch === 'yes' ? '#10b981' : '#6366f1'), strokeWidth: 2.5 },
+    }
+
+    const updatedNodes = [...nodes, newNode]
+    const updatedEdges = [...edges, newEdge]
+    const layouted = getLayoutedElements(updatedNodes, updatedEdges)
+    
+    setNodes(layouted)
+    setEdges(updatedEdges)
+    setShowPicker(null)
+    setSelectedNodeId(newId)
+  }, [showPicker, nodes, edges, getLayoutedElements, setNodes, setEdges])
 
   const navigate = useNavigate()
   const [campaign, setCampaign] = useState(null)
@@ -809,29 +825,23 @@ export default function CampaignBuilder() {
         <div className="flex items-stretch gap-5 h-[650px]">
           {/* Action Sidebar */}
           <div className="w-[200px] shrink-0 flex flex-col gap-2 p-3 bg-bg-primary/40 rounded-2xl border border-white/5 overflow-y-auto">
-            <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 px-1">Actions</div>
+            <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 px-1">Available Steps</div>
             {Object.entries(ACTION_TYPES).filter(([k]) => k !== 'end').map(([key, def]) => {
               const Icon = def.icon
               return (
                 <div
                   key={key}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData('application/reactflow', key);
-                    e.dataTransfer.effectAllowed = 'move';
-                  }}
-                  className={`flex items-center gap-3 p-3 rounded-xl border bg-gradient-to-br ${def.bgClass} ${def.borderClass} cursor-grab active:cursor-grabbing hover:scale-[1.02] transition-all text-left group`}
+                  className={`flex items-center gap-3 p-3 rounded-xl border bg-gradient-to-br ${def.bgClass} ${def.borderClass} opacity-80 cursor-default grayscale-[0.3] transition-all text-left group`}
                 >
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${def.color}20` }}>
                     <Icon className="w-4 h-4" style={{ color: def.color }} />
                   </div>
                   <div className="text-xs font-semibold text-text-primary whitespace-nowrap overflow-hidden text-ellipsis">{def.label}</div>
-                  <Plus className="w-3 h-3 ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-text-muted" />
                 </div>
               )
             })}
-            <div className="mt-auto pt-4 text-[10px] text-text-muted text-center italic">
-              Drag steps onto the canvas or click nodes to configure
+            <div className="mt-auto pt-4 text-[10px] text-text-muted text-center italic leading-relaxed">
+              Click the <Plus className="w-2 h-2 inline-block mx-0.5" /> button on any node to add the next step in your sequence.
             </div>
           </div>
 
@@ -845,6 +855,7 @@ export default function CampaignBuilder() {
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
+                  onRequestAdd={handleRequestAdd}
                   onNodeSelect={setSelectedNodeId}
                   setNodes={setNodes}
                 />
@@ -1056,6 +1067,54 @@ export default function CampaignBuilder() {
         </div>
       </div>
 
+
+      {/* Action Picker Modal */}
+      {showPicker && (
+        <div className="modal-overlay z-[120] p-4 flex items-center justify-center overflow-y-auto">
+          <div className="glass-card max-w-2xl w-full p-8 relative animate-in zoom-in duration-300">
+            <button 
+              onClick={() => setShowPicker(null)} 
+              className="absolute top-4 right-4 p-2 hover:bg-white/5 rounded-xl transition-colors text-text-muted hover:text-text-primary"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-12 h-12 rounded-2xl bg-primary/20 flex items-center justify-center">
+                <Plus className="w-6 h-6 text-primary" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-text-primary">Add Campaign Step</h2>
+                <p className="text-sm text-text-muted">Select the next action in your sequence</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {Object.entries(ACTION_TYPES)
+                .filter(([k]) => k !== 'end' && k !== 'start')
+                .map(([key, type]) => {
+                  const Icon = type.icon;
+                  return (
+                    <button 
+                      key={key}
+                      onClick={() => handleSelectAction(key)}
+                      className={`flex flex-col items-center gap-4 p-6 rounded-2xl bg-bg-surface/40 border border-white/5 hover:border-primary/50 hover:bg-primary/10 transition-all group relative overflow-hidden`}
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                      <div 
+                        className="w-14 h-14 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-110 shadow-lg relative z-10" 
+                        style={{ background: `linear-gradient(135deg, ${type.color}30, ${type.color}10)` }}
+                      >
+                        <Icon className="w-7 h-7" style={{ color: type.color }} />
+                      </div>
+                      <span className="text-sm font-bold text-text-primary relative z-10">{type.label}</span>
+                    </button>
+                  )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Deletion Warning Modal */}
       {nodeIdToRemove && (
