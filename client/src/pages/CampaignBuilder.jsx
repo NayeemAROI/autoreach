@@ -1,26 +1,25 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import {
-  ArrowLeft, Save, Plus, Trash2, GripVertical,
+import { 
+  ArrowLeft, Save, Plus, Trash2,
   UserPlus, Eye, ThumbsUp, Award, MessageCircle,
-  MessageSquare, Clock, XCircle, X, ChevronDown,
-  Check, AlertCircle, Send, UserMinus, CheckCircle2,
-  MousePointer2, Move, Layout
+  MessageSquare, Clock, XCircle, X,
+  AlertCircle, Rocket, Hash,
+  Play, Pause, Menu, UserMinus, PlusCircle
 } from 'lucide-react'
 import { apiFetch } from '../utils/api'
-import Flowchart from '../components/Flowchart'
-import { 
-  ReactFlowProvider, 
-  useReactFlow, 
-  useNodesState, 
-  useEdgesState, 
-  addEdge, 
-  MarkerType 
-} from '@xyflow/react'
-import dagre from 'dagre'
 
 // ─── Action Type Definitions ───
 const ACTION_TYPES = {
+  start: {
+    label: 'Start Execution',
+    icon: Rocket,
+    color: '#3b82f6',
+    bgClass: 'from-blue-500/20 to-blue-600/10',
+    borderClass: 'border-blue-500/30',
+    hasBranching: false,
+    configFields: []
+  },
   send_invite: {
     label: 'Send Invite',
     icon: UserPlus,
@@ -28,11 +27,10 @@ const ACTION_TYPES = {
     bgClass: 'from-indigo-500/20 to-indigo-600/10',
     borderClass: 'border-indigo-500/30',
     hasBranching: true,
-    condition: 'invite_accepted',
     conditionLabel: 'Invite Accepted?',
     configFields: [
       { key: 'withNote', type: 'toggle', label: 'Include Note (Premium)', default: false },
-      { key: 'note', type: 'textarea', label: 'Connection Note', placeholder: 'Hi {{firstName}}, I\'d love to connect...', showIf: 'withNote' },
+      { key: 'note', type: 'textarea', label: 'Connection Note', placeholder: 'Hi {{firstName}}, I\\'d love to connect...', showIf: 'withNote' },
     ]
   },
   view_profile: {
@@ -80,7 +78,6 @@ const ACTION_TYPES = {
     bgClass: 'from-cyan-500/20 to-cyan-600/10',
     borderClass: 'border-cyan-500/30',
     hasBranching: true,
-    condition: 'message_replied',
     conditionLabel: 'Replied?',
     configFields: [
       { key: 'message', type: 'textarea', label: 'Message Content', placeholder: 'Hi {{firstName}}, I wanted to reach out about...' }
@@ -118,13 +115,11 @@ const ACTION_TYPES = {
   }
 }
 
-// ─── Generate unique node IDs ───
 let nodeCounter = 0
 function makeNodeId() {
   return `node_${Date.now()}_${++nodeCounter}`
 }
 
-// ─── Default empty tree with just a start marker ───
 function createDefaultTree() {
   const startId = makeNodeId()
   return {
@@ -133,7 +128,6 @@ function createDefaultTree() {
       [startId]: {
         id: startId,
         type: 'start',
-        label: 'Start',
         config: {},
         yesChild: null,
         noChild: null,
@@ -142,351 +136,152 @@ function createDefaultTree() {
   }
 }
 
-// ─── SequenceNode Component ───
-// SequenceNode is now handled by Flowchart component
+// Layout Constants
+const NODE_W = 260
+const NODE_H = 100
+const COND_H = 40  // Additional height for branch split UI
+const GAP_X = 60
+const GAP_Y = 80
 
-// ─── Add Node Button ───
-function AddNodeButton({ onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-10 h-10 rounded-xl border-2 border-dashed border-border-light hover:border-primary hover:bg-primary/10 flex items-center justify-center text-text-muted hover:text-primary transition-all duration-200 group"
-    >
-      <Plus className="w-4 h-4 group-hover:scale-110 transition-transform" />
-    </button>
-  )
-}
+/**
+ * Calculates tree layout with bottom-up width accumulation and top-down positioning.
+ */
+function calculateLayout(tree) {
+  if (!tree || !tree.rootId || !tree.nodes[tree.rootId]) return { nodes: [], edges: [], width: 0, height: 0 }
 
-// ─── Action Picker Modal ───
-function ActionPicker({ onSelect, onClose }) {
-  const actions = Object.entries(ACTION_TYPES)
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content max-w-lg" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-5">
-          <h3 className="text-lg font-bold text-text-primary">Add Action Step</h3>
-          <button onClick={onClose} className="p-1.5 hover:bg-bg-elevated rounded-lg text-text-muted"><X className="w-5 h-5" /></button>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          {actions.map(([key, def]) => {
-            const Icon = def.icon
-            return (
-              <button
-                key={key}
-                onClick={() => onSelect(key)}
-                className={`flex items-center gap-3 p-3 rounded-xl border bg-gradient-to-br ${def.bgClass} ${def.borderClass} hover:scale-[1.02] transition-all text-left`}
-              >
-                <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: `${def.color}20` }}>
-                  <Icon className="w-4 h-4" style={{ color: def.color }} />
-                </div>
-                <div>
-                  <div className="text-sm font-semibold text-text-primary">{def.label}</div>
-                  {def.hasBranching && <div className="text-[10px] text-text-muted">Has Yes/No branch</div>}
-                  {def.isTerminal && <div className="text-[10px] text-text-muted">Terminal node</div>}
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-}
+  const widths = {}
+  const positions = {}
+  const edges = []
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let minX = Infinity
 
-// ─── Config Panel (Right Sidebar) ───
-function ConfigPanel({ node, onUpdateConfig, onClose, onRemove }) {
-  const typeDef = ACTION_TYPES[node.type]
-  if (!typeDef) return null
+  // Pass 1: recursive compute subtree total width required
+  const measureWidth = (nodeId) => {
+    if (!nodeId || !tree.nodes[nodeId]) return 0
+    const node = tree.nodes[nodeId]
+    const typeDef = ACTION_TYPES[node.type]
 
-  const Icon = typeDef.icon
+    let width = NODE_W
+    let leftW = 0
+    let rightW = 0
 
-  return (
-    <div className="w-full glass-card p-6 min-h-full animate-fade-in overflow-y-auto hover:transform-none">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `${typeDef.color}20` }}>
-            <Icon className="w-5 h-5" style={{ color: typeDef.color }} />
-          </div>
-          <div>
-            <h3 className="text-base font-bold text-text-primary">{typeDef.label}</h3>
-            <p className="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Step Configuration</p>
-          </div>
-        </div>
-        <button onClick={onClose} className="p-2 hover:bg-bg-elevated rounded-xl text-text-muted transition-colors"><X className="w-5 h-5" /></button>
-      </div>
+    if (typeDef?.hasBranching) {
+      leftW = measureWidth(node.noChild)
+      rightW = measureWidth(node.yesChild)
+      // For branching nodes, we need enough horizontal space to fit both subtrees + gap
+      const branchReqW = (leftW > 0 ? leftW : NODE_W) + (rightW > 0 ? rightW : NODE_W) + GAP_X
+      width = Math.max(width, branchReqW)
+    } else {
+      // Linear node, width is just the max of us and our single child subtree
+      rightW = measureWidth(node.yesChild) // for linear, we store it in yesChild
+      width = Math.max(width, rightW > 0 ? rightW : NODE_W)
+    }
 
-      <div className="space-y-6">
-        {typeDef.hasBranching && (
-          <div className="bg-info/10 border border-info/20 rounded-2xl p-4 text-xs text-info flex gap-3">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <div>
-              This step branches based on: <strong>{typeDef.conditionLabel}</strong>. 
-              Configure the next steps for both YES and NO paths on the canvas.
-            </div>
-          </div>
-        )}
+    widths[nodeId] = { w: width, leftW, rightW }
+    return width
+  }
 
-        {typeDef.configFields.length === 0 ? (
-          <div className="p-8 rounded-2xl border border-dashed border-border/50 text-center">
-             <p className="text-xs text-text-muted">No configuration needed for this action.</p>
-          </div>
-        ) : (
-          <div className="space-y-5">
-            {typeDef.configFields.map((field) => {
-              // Handle conditional visibility
-              if (field.showIf && !node.config?.[field.showIf]) return null
+  measureWidth(tree.rootId)
 
-              if (field.type === 'textarea') {
-                return (
-                  <div key={field.key} className="space-y-2">
-                    <label className="text-xs font-semibold text-text-secondary block">{field.label}</label>
-                    <textarea
-                      className="input !text-sm !py-3 min-h-[120px] resize-y"
-                      placeholder={field.placeholder}
-                      value={node.config?.[field.key] || ''}
-                      onChange={(e) => onUpdateConfig(node.id, field.key, e.target.value)}
-                    />
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {['firstName', 'lastName', 'company'].map(tag => (
-                        <button 
-                          key={tag}
-                          onClick={() => onUpdateConfig(node.id, field.key, (node.config?.[field.key] || '') + ` {{${tag}}}`)}
-                          className="px-2 py-1 rounded bg-bg-elevated border border-border text-[9px] text-text-muted hover:text-primary hover:border-primary/30 transition-colors"
-                        >
-                          + {tag}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )
-              }
-              if (field.type === 'number') {
-                return (
-                  <div key={field.key} className="space-y-2">
-                    <label className="text-xs font-semibold text-text-secondary block">{field.label}</label>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="number"
-                        className="input !text-sm !py-2 !w-24 text-center"
-                        min={field.min}
-                        max={field.max}
-                        value={node.config?.[field.key] ?? field.default ?? ''}
-                        onChange={(e) => onUpdateConfig(node.id, field.key, parseInt(e.target.value) || field.default)}
-                      />
-                      <span className="text-xs text-text-muted">days after previous step</span>
-                    </div>
-                  </div>
-                )
-              }
-              if (field.type === 'toggle') {
-                return (
-                  <div key={field.key} className="flex items-center justify-between p-3 rounded-xl bg-bg-primary/40 border border-white/5">
-                    <label className="text-xs font-semibold text-text-secondary">{field.label}</label>
-                    <div
-                      className={`toggle ${node.config?.[field.key] ? 'active' : ''}`}
-                      onClick={() => onUpdateConfig(node.id, field.key, !node.config?.[field.key])}
-                    ></div>
-                  </div>
-                )
-              }
-              return null
-            })}
-          </div>
-        )}
+  // Pass 2: assign absolute x/y
+  const assignPositions = (nodeId, x, y) => {
+    if (!nodeId || !tree.nodes[nodeId]) return
+    const node = tree.nodes[nodeId]
+    const typeDef = ACTION_TYPES[node.type]
+    const wData = widths[nodeId]
 
-        <div className="pt-6 border-t border-border/50 mt-10">
-          <button
-            onClick={onRemove}
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border border-danger/30 text-danger hover:bg-danger/10 transition-all font-semibold text-sm"
-          >
-            <Trash2 className="w-4 h-4" />
-            Remove this Step
-          </button>
-        </div>
-      </div>
-    </div>
-  )
+    positions[nodeId] = { x, y }
+    
+    // Tracking bounds
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y > maxY) maxY = y
+
+    const nextY = y + NODE_H + GAP_Y + (typeDef?.hasBranching ? COND_H : 0)
+
+    if (typeDef?.hasBranching) {
+      // Center branching logic proportionally based on child widths
+      const leftSubW = wData.leftW > 0 ? wData.leftW : NODE_W
+      const rightSubW = wData.rightW > 0 ? wData.rightW : NODE_W
+      
+      const leftCenter = x - (leftSubW / 2) - (GAP_X / 2)
+      const rightCenter = x + (rightSubW / 2) + (GAP_X / 2)
+
+      if (node.noChild) {
+        edges.push({ source: nodeId, target: node.noChild, label: 'NO', color: '#ef4444' })
+        assignPositions(node.noChild, leftCenter, nextY)
+      }
+      if (node.yesChild) {
+        edges.push({ source: nodeId, target: node.yesChild, label: 'YES', color: '#10b981' })
+        assignPositions(node.yesChild, rightCenter, nextY)
+      }
+    } else {
+      if (node.yesChild) {
+        edges.push({ source: nodeId, target: node.yesChild, label: '', color: '#3b82f6' })
+        assignPositions(node.yesChild, x, nextY)
+      }
+    }
+  }
+
+  assignPositions(tree.rootId, 0, 0)
+
+  // Normalize all coordinates so minX is around 0
+  const offsetX = -minX + (NODE_W/2) + 100 // Extra padding
+  const nodes = Object.entries(positions).map(([id, pos]) => ({
+    id,
+    ...tree.nodes[id],
+    x: pos.x + offsetX,
+    y: pos.y + 100 // Top padding
+  }))
+
+  edges.forEach(e => {
+    e.sourcePos = { x: positions[e.source].x + offsetX, y: positions[e.source].y + 100 }
+    e.targetPos = { x: positions[e.target].x + offsetX, y: positions[e.target].y + 100 }
+    e.sourceHasBranching = ACTION_TYPES[tree.nodes[e.source].type]?.hasBranching || false
+  })
+
+  return {
+    nodes,
+    edges,
+    bounds: {
+      width: (maxX - minX) + NODE_W + 200,
+      height: maxY + NODE_H + 300
+    }
+  }
 }
 
 
-const FlowWrapper = ({ 
-  nodes, 
-  edges, 
-  onNodesChange, 
-  onEdgesChange, 
-  onConnect, 
-  onRequestAdd, 
-  onNodeSelect 
-}) => {
-  return (
-    <div className="w-full h-full relative">
-      <Flowchart 
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        onRequestAdd={onRequestAdd}
-        onNodeSelect={onNodeSelect}
-      />
-    </div>
-  )
-}
-
-// ─── Main CampaignBuilder Component ───
+// ─── Main Component ───
 export default function CampaignBuilder() {
   const { id } = useParams()
+  const navigate = useNavigate()
+  
+  const [activeTab, setActiveTab] = useState('sequence') // sequence | leads | schedule
+  const [campaign, setCampaign] = useState(null)
+  
   const [tree, setTree] = useState(null)
+  const [selectedNodeId, setSelectedNodeId] = useState(null)
+  const [showPicker, setShowPicker] = useState(null) // { parentId, branch: 'yes'|'no' }
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  
+  const [enrolledLeads, setEnrolledLeads] = useState([])
+  
   const [schedule, setSchedule] = useState({
     timezone: 'UTC',
-    days: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-    hours: [9, 10, 11, 12, 13, 14, 15, 16, 17]
+    days: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    startTime: '09:00',
+    endTime: '17:00'
   })
-  const [enrolledLeads, setEnrolledLeads] = useState([])
+
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [selectedNodeId, setSelectedNodeId] = useState(null)
-  const [nodeIdToRemove, setNodeIdToRemove] = useState(null)
-  const [showPicker, setShowPicker] = useState(null) // { parentId, branch }
-  const [nodes, setNodes, onNodesChange] = useNodesState([])
-  const [edges, setEdges, onEdgesChange] = useEdgesState([])
-  const lastSyncedTreeRef = useRef(null)
-
   const [toastMsg, setToastMsg] = useState(null)
+
   const showToast = (text, type = 'success') => {
     setToastMsg({ text, type })
     setTimeout(() => setToastMsg(null), 4000)
   }
-
-  // Helper to get layouted elements
-  const getLayoutedElements = useCallback((nodes, edges, direction = 'TB') => {
-    const dagreGraph = new dagre.graphlib.Graph()
-    dagreGraph.setDefaultEdgeLabel(() => ({}))
-    dagreGraph.setGraph({ 
-      rankdir: direction,
-      nodesep: 150, // Space between nodes at same level
-      ranksep: 120, // Space between levels
-      marginx: 50,
-      marginy: 50
-    })
-
-    nodes.forEach((node) => {
-      dagreGraph.setNode(node.id, { width: 250, height: 120 })
-    })
-
-    edges.forEach((edge) => {
-      dagreGraph.setEdge(edge.source, edge.target)
-    })
-
-    dagre.layout(dagreGraph)
-
-    return nodes.map((node) => {
-      const nodeWithPosition = dagreGraph.node(node.id)
-      return {
-        ...node,
-        position: {
-          x: nodeWithPosition.x - 125,
-          y: nodeWithPosition.y - 60,
-        },
-      }
-    })
-  }, [])
-
-  const onConnect = useCallback((params) => {
-    setEdges((eds) => addEdge({
-      ...params,
-      type: 'smoothstep',
-      pathOptions: { borderRadius: 0 },
-      label: params.sourceHandle === 'yes' ? 'YES' : (params.sourceHandle === 'no' ? 'NO' : null),
-      labelStyle: { fill: params.sourceHandle === 'no' ? '#ef4444' : '#10b981', fontWeight: 800, fontSize: 10 },
-      markerEnd: { type: MarkerType.ArrowClosed, color: params.sourceHandle === 'no' ? '#ef4444' : (params.sourceHandle === 'yes' ? '#10b981' : '#6366f1') },
-      style: { stroke: params.sourceHandle === 'no' ? '#ef4444' : (params.sourceHandle === 'yes' ? '#10b981' : '#6366f1'), strokeWidth: 2.5 },
-    }, eds))
-  }, [setEdges])
-
-  const handleRequestAdd = useCallback((parentId, branch = null) => {
-    setShowPicker({ parentId, branch })
-  }, [])
-
-  const handleSelectAction = useCallback((actionType) => {
-    if (!showPicker) return
-    const { parentId, branch } = showPicker
-    
-    const parentNode = nodes.find(n => n.id === parentId)
-    const typeDef = ACTION_TYPES[actionType]
-    const newId = `node_${Date.now()}`
-    
-    const newNode = {
-      id: newId,
-      type: typeDef.hasBranching ? 'condition' : 'action',
-      position: parentNode ? { x: parentNode.position.x, y: parentNode.position.y + 200 } : { x: 250, y: 150 },
-      data: { 
-        type: actionType, 
-        label: typeDef.label,
-        config: {},
-      },
-    }
-
-    const newEdge = {
-      id: `e-${parentId}-${newId}`,
-      source: parentId,
-      target: newId,
-      sourceHandle: branch || null,
-      type: 'smoothstep',
-      pathOptions: { borderRadius: 0 },
-      label: branch === 'yes' ? 'YES' : (branch === 'no' ? 'NO' : null),
-      labelStyle: { fill: branch === 'no' ? '#ef4444' : (branch === 'yes' ? '#10b981' : '#6366f1'), fontWeight: 800, fontSize: 10 },
-      markerEnd: { type: MarkerType.ArrowClosed, color: branch === 'no' ? '#ef4444' : (branch === 'yes' ? '#10b981' : '#6366f1') },
-      style: { stroke: branch === 'no' ? '#ef4444' : (branch === 'yes' ? '#10b981' : '#6366f1'), strokeWidth: 2.5 },
-    }
-
-    const updatedNodes = [...nodes, newNode]
-    const updatedEdges = [...edges, newEdge]
-    const layouted = getLayoutedElements(updatedNodes, updatedEdges)
-    
-    setNodes(layouted)
-    setEdges(updatedEdges)
-    setShowPicker(null)
-    setSelectedNodeId(newId)
-  }, [showPicker, nodes, edges, getLayoutedElements, setNodes, setEdges])
-
-  const navigate = useNavigate()
-  const [campaign, setCampaign] = useState(null)
-  const canvasRef = useRef(null)
-  const [verifying, setVerifying] = useState(false)
-  const pollIntervalRef = useRef(null)
-
-  const DAY_OPTIONS = [
-    { key: 'mon', label: 'Mon' },
-    { key: 'tue', label: 'Tue' },
-    { key: 'wed', label: 'Wed' },
-    { key: 'thu', label: 'Thu' },
-    { key: 'fri', label: 'Fri' },
-    { key: 'sat', label: 'Sat' },
-    { key: 'sun', label: 'Sun' },
-  ]
-
-  const fetchEnrolledLeads = useCallback(async () => {
-    try {
-      const res = await apiFetch(`/api/campaigns/${id}/leads`)
-      const data = await res.json()
-      setEnrolledLeads(data.leads || [])
-      
-      // If any leads are currently verifying or pending, keep polling
-      const isStillVerifying = (data.leads || []).some(l => 
-        l.verification_status === 'verifying' || l.verification_status === 'pending'
-      )
-      
-      if (isStillVerifying && !pollIntervalRef.current) {
-        pollIntervalRef.current = setInterval(fetchEnrolledLeads, 3000)
-      } else if (!isStillVerifying && pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-        pollIntervalRef.current = null
-      }
-    } catch (err) {
-      console.error('Failed to fetch enrolled leads:', err)
-    }
-  }, [id])
 
   // Load campaign
   useEffect(() => {
@@ -496,20 +291,17 @@ export default function CampaignBuilder() {
         const data = await res.json()
         setCampaign(data)
 
-        // Parse existing sequence or create default
         if (data.sequence && typeof data.sequence === 'object' && data.sequence.rootId) {
           setTree(data.sequence)
         } else {
           setTree(createDefaultTree())
         }
 
-        // Load schedule
-        if (data.schedule && typeof data.schedule === 'object' && data.schedule.startTime) {
+        if (data.schedule && data.schedule.startTime) {
           setSchedule(data.schedule)
         }
 
-        // Load enrolled leads
-        await fetchEnrolledLeads()
+        fetchEnrolledLeads()
       } catch (err) {
         console.error(err)
       } finally {
@@ -517,648 +309,656 @@ export default function CampaignBuilder() {
       }
     }
     load()
+  }, [id])
 
-  }, [id, fetchEnrolledLeads])
-
-  // Sync tree to React Flow elements when tree is loaded or reset
-  useEffect(() => {
-    if (!tree?.nodes) return
-    
-    // Guard against infinite loops: only sync if this is a NEW tree object from lead fetch or initial load
-    // If the tree was just updated by our own save/sync, ignore it
-    const treeJson = JSON.stringify(tree)
-    if (lastSyncedTreeRef.current === treeJson) return
-    lastSyncedTreeRef.current = treeJson
-
-    const newNodes = []
-    const newEdges = []
-
-    Object.values(tree.nodes).forEach((node) => {
-      const isStart = node.type === 'start'
-      const isCondition = node.type === 'send_invite' || node.type === 'send_message'
-      
-      newNodes.push({
-        id: node.id,
-        type: isStart ? 'start' : (isCondition ? 'condition' : 'action'),
-        data: { 
-          ...node,
-          conditionLabel: isCondition ? (node.type === 'send_invite' ? 'Invite Accepted?' : 'Replied?') : null
-        },
-        position: node.position || { x: 0, y: 0 },
-      })
-
-      if (node.yesChild) {
-        newEdges.push({
-          id: `e-${node.id}-${node.yesChild}`,
-          source: node.id,
-          target: node.yesChild,
-          sourceHandle: isCondition ? 'yes' : null,
-          type: 'smoothstep',
-          pathOptions: { borderRadius: 0 },
-          label: isCondition ? 'YES' : null,
-          labelStyle: { fill: '#10b981', fontWeight: 800, fontSize: 10 },
-          markerEnd: { type: MarkerType.ArrowClosed, color: isCondition ? '#10b981' : '#6366f1' },
-          style: { stroke: isCondition ? '#10b981' : '#6366f1', strokeWidth: 2.5 },
-        })
-      }
-
-      if (node.noChild) {
-        newEdges.push({
-          id: `e-${node.id}-${node.noChild}`,
-          source: node.id,
-          target: node.noChild,
-          sourceHandle: 'no',
-          type: 'smoothstep',
-          pathOptions: { borderRadius: 0 },
-          label: 'NO',
-          labelStyle: { fill: '#ef4444', fontWeight: 800, fontSize: 10 },
-          markerEnd: { type: MarkerType.ArrowClosed, color: '#ef4444' },
-          style: { stroke: '#ef4444', strokeWidth: 2.5 },
-        })
-      }
-    })
-
-    // Only auto-layout if no positions exist
-    const needsLayout = newNodes.some(n => (!n.position || (n.position.x === 0 && n.position.y === 0)))
-    if (needsLayout) {
-      setNodes(getLayoutedElements(newNodes, newEdges))
-    } else {
-      setNodes(newNodes)
-    }
-    setEdges(newEdges)
-  }, [tree, getLayoutedElements, setNodes, setEdges])
-
-
-
-
-
-  const handleRemoveLead = async (leadId) => {
-    setEnrolledLeads(prev => prev.filter(l => l.id !== leadId))
-    // Update campaign leadIds
-    const remaining = enrolledLeads.filter(l => l.id !== leadId).map(l => l.id)
+  const fetchEnrolledLeads = async () => {
     try {
-      await apiFetch(`/api/campaigns/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadIds: remaining })
-      })
+      const res = await apiFetch(`/api/campaigns/${id}/leads`)
+      const data = await res.json()
+      setEnrolledLeads(data.leads || [])
     } catch (err) {
       console.error(err)
-    }
-  }
-
-  const handleVerifyLeads = async () => {
-    if (enrolledLeads.length === 0) return
-    setVerifying(true)
-    try {
-      await apiFetch(`/api/campaigns/${id}/verify`, { method: 'POST' })
-      // Start polling for updates
-      if (!pollIntervalRef.current) {
-        pollIntervalRef.current = setInterval(fetchEnrolledLeads, 3000)
-      }
-    } catch (err) {
-      console.error('Failed to start verification:', err)
-      showToast('Failed to start verification', 'error')
-    } finally {
-      setVerifying(false)
-    }
-  }
-
-  // Update node config
-  const handleUpdateConfig = useCallback((nodeId, key, value) => {
-    setNodes((nds) =>
-      nds.map((node) => {
-        if (node.id === nodeId) {
-          return {
-            ...node,
-            data: {
-              ...node.data,
-              config: {
-                ...(node.data.config || {}),
-                [key]: value,
-              },
-            },
-          }
-        }
-        return node
-      })
-    )
-  }, [setNodes])
-
-  // Remove node (and all its children)
-  const handleRemoveNode = useCallback((nodeId) => {
-    const nodeToRemove = nodes.find(n => n.id === nodeId)
-    if (!nodeToRemove) return
-
-    // If it has children, show my custom in-flow warning
-    const hasChildren = edges.some(e => e.source === nodeId)
-    if (hasChildren) {
-      setNodeIdToRemove(nodeId)
-    } else {
-      performDelete(nodeId)
-    }
-  }, [nodes, edges])
-
-  const performDelete = (nodeId) => {
-    if (selectedNodeId === nodeId) setSelectedNodeId(null)
-    setNodeIdToRemove(null)
-    
-    // Also update nodes and edges state
-    setNodes(nds => nds.filter(n => n.id !== nodeId))
-    setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId))
-  }
-
-  const handleVerifyLead = async (leadId, force = false) => {
-    setVerifying(true)
-    try {
-      await apiFetch(`/api/campaigns/${id}/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId, force })
-      })
-      // Start polling for updates
-      if (!pollIntervalRef.current) {
-        pollIntervalRef.current = setInterval(fetchEnrolledLeads, 3000)
-      }
-    } catch (err) {
-      console.error('Failed to verify lead:', err)
-      showToast('Failed to verify lead', 'error')
-    } finally {
-      setVerifying(false)
     }
   }
 
   const handleSave = async () => {
     setSaving(true)
     try {
-      // 1. Build the tree structure from current nodes and edges
-      const campaignNodes = {}
-      nodes.forEach(n => {
-        const nodeData = { 
-          ...n.data, 
-          id: n.id, 
-          position: n.position // Save positions for next load
-        }
-        
-        // Find children from edges
-        const yesEdge = edges.find(e => e.source === n.id && (e.sourceHandle === 'yes' || (!e.sourceHandle && n.type !== 'condition')))
-        const noEdge = edges.find(e => e.source === n.id && e.sourceHandle === 'no')
-        
-        nodeData.yesChild = yesEdge?.target || null
-        nodeData.noChild = noEdge?.target || null
-        campaignNodes[n.id] = nodeData
-      })
-
-      const rootNode = nodes.find(n => n.type === 'start')
-      if (!rootNode) throw new Error('Campaign must have a Start node.')
-
-      const finalTree = {
-        id: tree?.id || id,
-        rootId: rootNode.id,
-        nodes: campaignNodes
-      }
-
-      console.log('Saving campaign flow:', finalTree)
-
-      const res = await apiFetch(`/api/campaigns/${id}`, {
+      await apiFetch(`/api/campaigns/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sequence: finalTree,
-          schedule: schedule,
-          leadIds: enrolledLeads.map(l => l.id)
-        })
+        body: JSON.stringify({ sequence: tree, schedule })
       })
-
-      if (!res.ok) throw new Error('Failed to save campaign')
-
-      showToast('Campaign saved successfully!', 'success')
-      setTree(finalTree)
+      showToast('Campaign Settings Saved!')
     } catch (err) {
-      console.error('Save error:', err)
-      showToast(err.message || 'Failed to save campaign.', 'error')
+      console.error(err)
+      showToast('Failed to save', 'error')
     } finally {
       setSaving(false)
     }
   }
 
-  const toggleDay = (day) => {
-    setSchedule(prev => ({
+  const toggleCampaignStatus = async () => {
+    if (!campaign) return
+    const newStatus = campaign.status === 'active' ? 'paused' : 'active'
+    try {
+      await apiFetch(`/api/campaigns/${campaign.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus })
+      })
+      setCampaign(prev => ({ ...prev, status: newStatus }))
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  // ——— Tree Mutations ———
+  const handleUpdateConfig = (nodeId, key, value) => {
+    setTree(prev => ({
       ...prev,
-      days: prev.days.includes(day)
-        ? prev.days.filter(d => d !== day)
-        : [...prev.days, day]
+      nodes: {
+        ...prev.nodes,
+        [nodeId]: {
+          ...prev.nodes[nodeId],
+          config: { ...prev.nodes[nodeId].config, [key]: value }
+        }
+      }
     }))
   }
 
-  const selectedNode = nodes.find(n => n.id === selectedNodeId)?.data || tree?.nodes[selectedNodeId]
+  const handleAddAction = (actionType) => {
+    if (!showPicker) return
+    const { parentId, branch } = showPicker
+    const newId = makeNodeId()
+    const typeDef = ACTION_TYPES[actionType]
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-[60vh]">
-        <div className="inline-block w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    )
+    setTree(prev => {
+      const nextNodes = { ...prev.nodes }
+      // Add new node
+      nextNodes[newId] = {
+        id: newId,
+        type: actionType,
+        config: typeDef.configFields.reduce((acc, f) => ({...acc, [f.key]: f.default !== undefined ? f.default : ''}), {}),
+        yesChild: null,
+        noChild: null
+      }
+      
+      // Link parent
+      const parent = { ...nextNodes[parentId] }
+      if (branch === 'no') {
+        parent.noChild = newId
+      } else {
+        parent.yesChild = newId // also used for non-branching linear flow
+      }
+      nextNodes[parentId] = parent
+
+      return { ...prev, nodes: nextNodes }
+    })
+    
+    setShowPicker(null)
+    setSelectedNodeId(newId)
   }
 
-  if (!campaign) {
-    return (
-      <div className="text-center py-20 text-text-muted">
-        <p>Campaign not found.</p>
-        <button onClick={() => navigate('/campaigns')} className="btn btn-secondary mt-4">Back to Campaigns</button>
-      </div>
-    )
+  const handleDeleteSubtree = (nodeId) => {
+    if (nodeId === tree.rootId) return // Cannot delete start node
+
+    setTree(prev => {
+      const nextNodes = { ...prev.nodes }
+      
+      // 1. Remove reference from parent
+      Object.values(nextNodes).forEach(n => {
+        if (n.yesChild === nodeId) nextNodes[n.id] = { ...n, yesChild: null }
+        if (n.noChild === nodeId) nextNodes[n.id] = { ...n, noChild: null }
+      })
+
+      // 2. Recursive delete children to prevent memory leaks in JSON
+      const purge = (id) => {
+        if (!nextNodes[id]) return
+        const node = nextNodes[id]
+        if (node.yesChild) purge(node.yesChild)
+        if (node.noChild) purge(node.noChild)
+        delete nextNodes[id]
+      }
+      purge(nodeId)
+
+      return { ...prev, nodes: nextNodes }
+    })
+    
+    if (selectedNodeId === nodeId) setSelectedNodeId(null)
+    setConfirmDeleteId(null)
   }
 
-  const nodeCount = tree ? Object.keys(tree.nodes).length - 1 : 0
+  const attemptDelete = (nodeId) => {
+    const node = tree.nodes[nodeId]
+    if (node.yesChild || node.noChild) {
+      setConfirmDeleteId(nodeId) // Show warning if deleting branch
+    } else {
+      handleDeleteSubtree(nodeId)
+    }
+  }
+
+
+  // ——— Render Parts ———
+  const layout = useMemo(() => calculateLayout(tree), [tree])
+  
+  // Pan and Zoom logic
+  const panRef = useRef(null)
+  const isDragging = useRef(false)
+  const startPos = useRef({x: 0, y: 0})
+  const currentScroll = useRef({x: 0, y: 0})
+
+  const onMouseDownPan = (e) => {
+    if (e.target.closest('.node-interactive')) return // Don't drag if clicking nodes
+    isDragging.current = true
+    startPos.current = { x: e.clientX, y: e.clientY }
+    currentScroll.current = { x: panRef.current.scrollLeft, y: panRef.current.scrollTop }
+    panRef.current.style.cursor = 'grabbing'
+  }
+  const onMouseMovePan = (e) => {
+    if (!isDragging.current) return
+    const dx = e.clientX - startPos.current.x
+    const dy = e.clientY - startPos.current.y
+    panRef.current.scrollLeft = currentScroll.current.x - dx
+    panRef.current.scrollTop = currentScroll.current.y - dy
+  }
+  const onMouseUpPan = () => {
+    isDragging.current = false
+    if(panRef.current) panRef.current.style.cursor = 'grab'
+  }
+
+  // Define colors directly in case custom classes are removed
+  const typeColors = {
+    start: '#3b82f6',
+    send_invite: '#6366f1',
+    view_profile: '#8b5cf6',
+    like_post: '#3b82f6',
+    endorse: '#f59e0b',
+    comment: '#10b981',
+    send_message: '#06b6d4',
+    withdraw_invite: '#ef4444',
+    delay: '#9ca3af',
+    end: '#6b7280'
+  }
+
+
+  if (loading) return <div className="p-8 text-primary">Loading Editor...</div>
 
   return (
-    <div className="space-y-5 w-full">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/campaigns')}
-            className="p-2 rounded-xl hover:bg-bg-elevated text-text-muted hover:text-text-primary transition-colors"
-          >
+    <div className="w-full h-screen max-h-[100vh] overflow-hidden flex flex-col bg-bg-primary" style={{ padding: '0 !important' }}>
+      {/* HEADER */}
+      <header className="h-[76px] shrink-0 border-b border-border/50 bg-bg-surface flex items-center justify-between px-6 z-20">
+        <div className="flex items-center gap-6">
+          <button onClick={() => navigate('/campaigns')} className="w-10 h-10 rounded-xl flex items-center justify-center bg-bg-secondary hover:bg-bg-elevated text-text-primary transition-all border border-border/50">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <h1 className="text-xl font-bold text-text-primary">{campaign.name}</h1>
-            <p className="text-xs text-text-muted mt-0.5">
-              {nodeCount} step{nodeCount !== 1 ? 's' : ''} • {enrolledLeads.length} lead{enrolledLeads.length !== 1 ? 's' : ''} enrolled
-            </p>
-          </div>
-        </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="btn btn-primary"
-        >
-          {saving ? (
-            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-          ) : (
-            <Save className="w-4 h-4" />
-          )}
-          {saving ? 'Saving...' : 'Save Campaign'}
-        </button>
-      </div>
-
-      {/* ─── Section 1: Sequence Builder ─── */}
-      <div className="glass-card p-5 hover:transform-none !bg-bg-surface/20 border-white/5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-primary/20 flex items-center justify-center text-sm font-bold text-primary-light">1</div>
-            <h2 className="text-sm font-bold text-text-primary">Campaign Flow Design</h2>
-            <span className="text-[11px] text-text-muted ml-1">Drag and drop to build your sequence</span>
-          </div>
-          <div className="flex items-center gap-2">
-             <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-bg-elevated border border-border text-[10px] text-text-muted">
-                <MousePointer2 className="w-3 h-3" /> Select
-             </div>
-             <div className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-bg-elevated border border-border text-[10px] text-text-muted">
-                <Move className="w-3 h-3" /> Pan
-             </div>
+            <div className="text-[10px] font-black text-text-muted uppercase tracking-[0.2em] mb-1">Campaign Builder</div>
+            <h1 className="text-xl font-bold text-text-primary tracking-tight flex items-center gap-3">
+              {campaign?.name}
+              {campaign?.status === 'active' && <div className="w-2 h-2 rounded-full bg-success pulse-dot" />}
+            </h1>
           </div>
         </div>
 
-        <div className="flex items-stretch gap-5 h-[650px]">
-          {/* Action Sidebar */}
-          <div className="w-[200px] shrink-0 flex flex-col gap-2 p-3 bg-bg-primary/40 rounded-2xl border border-white/5 overflow-y-auto">
-            <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 px-1">Available Steps</div>
-            {Object.entries(ACTION_TYPES).filter(([k]) => k !== 'end').map(([key, def]) => {
-              const Icon = def.icon
-              return (
-                <div
-                  key={key}
-                  className={`flex items-center gap-3 p-3 rounded-xl border bg-gradient-to-br ${def.bgClass} ${def.borderClass} opacity-80 cursor-default grayscale-[0.3] transition-all text-left group`}
-                >
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: `${def.color}20` }}>
-                    <Icon className="w-4 h-4" style={{ color: def.color }} />
-                  </div>
-                  <div className="text-xs font-semibold text-text-primary whitespace-nowrap overflow-hidden text-ellipsis">{def.label}</div>
-                </div>
-              )
-            })}
-            <div className="mt-auto pt-4 text-[10px] text-text-muted text-center italic leading-relaxed">
-              Click the <Plus className="w-2 h-2 inline-block mx-0.5" /> button on any node to add the next step in your sequence.
-            </div>
-          </div>
-
-          {/* Flow Canvas */}
-          <div className="flex-1 bg-bg-primary/20 rounded-2xl relative overflow-hidden border border-white/5">
-            {tree && (
-              <ReactFlowProvider>
-                <FlowWrapper 
-                  nodes={nodes}
-                  edges={edges}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  onConnect={onConnect}
-                  onRequestAdd={handleRequestAdd}
-                  onNodeSelect={setSelectedNodeId}
-                  setNodes={setNodes}
-                />
-              </ReactFlowProvider>
-            )}
-          </div>
-
-          {/* Config Panel */}
-          {selectedNode && (
-            <div className="w-[340px] shrink-0 animate-in slide-in-from-right duration-300">
-               <ConfigPanel
-                node={selectedNode}
-                onUpdateConfig={handleUpdateConfig}
-                onClose={() => setSelectedNodeId(null)}
-                onRemove={() => handleRemoveNode(selectedNode.id)}
-              />
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ─── Section 2: Enrolled Leads ─── */}
-      <div className="glass-card p-5 hover:transform-none !bg-bg-surface/20 border-white/5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-accent/20 flex items-center justify-center text-sm font-bold text-accent-light">2</div>
-            <h2 className="text-sm font-bold text-text-primary">Enrolled Leads</h2>
-            <span className="text-[11px] text-text-muted ml-1">Leads scheduled for this campaign</span>
-          </div>
-          
-          {enrolledLeads.length > 0 && (
-            <button 
-              onClick={handleVerifyLeads}
-              disabled={verifying || enrolledLeads.every(l => l.verification_status === 'verified')}
-              className="text-[10px] font-bold text-primary hover:text-primary-light transition-colors disabled:opacity-30 flex items-center gap-1 bg-primary/10 px-3 py-1.5 rounded-lg border border-primary/20"
+        <div className="flex items-center gap-2 bg-bg-secondary p-1.5 rounded-xl border border-border/50">
+          {['sequence', 'leads', 'schedule'].map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-5 py-2 rounded-lg text-xs font-bold capitalize transition-all duration-200 ${
+                activeTab === tab 
+                  ? 'bg-bg-surface text-text-primary shadow border border-border/50' 
+                  : 'text-text-muted hover:text-text-primary hover:bg-bg-elevated/50'
+              }`}
             >
-              {verifying ? (
-                <div className="w-2.5 h-2.5 border border-primary border-t-transparent rounded-full animate-spin"></div>
-              ) : (
-                <Check className="w-2.5 h-2.5" />
-              )}
-              Verify All Leads
+              {tab}
             </button>
-          )}
+          ))}
         </div>
 
-        <div className="bg-bg-primary/50 rounded-xl border border-border/50 max-h-[400px] overflow-y-auto">
-          {enrolledLeads.length === 0 ? (
-            <div className="text-center py-12 text-xs text-text-muted">
-              <UserMinus className="w-8 h-8 mx-auto mb-2 opacity-20" />
-              <p>No leads enrolled yet.</p>
-              <p className="mt-1">Add leads to this campaign from the main Leads table.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border/30">
-              {enrolledLeads.map((lead) => (
-                <div key={lead.id} className="flex items-center gap-3 px-4 py-3 hover:bg-bg-hover transition-colors group">
-                  <div className="relative">
-                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary/20 to-accent/10 flex items-center justify-center text-xs font-bold text-primary-light shrink-0 overflow-hidden border border-border/30">
-                      {lead.avatar ? (
-                        <img src={lead.avatar} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        `${(lead.firstName?.[0] || '?')}${(lead.lastName?.[0] || '')}`
-                      )}
-                    </div>
-                    {lead.verification_status === 'verified' && (
-                      <div className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-success rounded-full border-2 border-bg-primary flex items-center justify-center shadow-lg">
-                        <Check className="w-2 h-2 text-white" />
-                      </div>
-                    )}
-                    {(lead.verification_status === 'verifying' || lead.verification_status === 'pending') && (
-                      <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-warning rounded-full border-2 border-bg-primary flex items-center justify-center shadow-lg">
-                        <div className="w-2 h-2 border border-white border-t-transparent rounded-full animate-spin"></div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <div className="text-sm font-medium text-text-primary truncate flex items-center gap-1.5">
-                        {lead.firstName || 'Unknown'} {lead.lastName || ''}
-                        {lead.isPremium === 1 && (
-                          <span className="w-3.5 h-3.5 bg-amber-400 rounded-sm flex items-center justify-center text-[8px] font-black text-bg-primary leading-none" title="LinkedIn Premium">IN</span>
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={toggleCampaignStatus}
+            className={`btn btn-sm ${campaign?.status === 'active' ? 'bg-bg-elevated text-warning hover:bg-bg-secondary border-border/50' : 'btn-primary'} rounded-xl px-5 flex items-center gap-2`}
+          >
+            {campaign?.status === 'active' ? <><Pause className="w-3.5 h-3.5"/> Pause</> : <><Play className="w-3.5 h-3.5"/> Activate</>}
+          </button>
+          <button onClick={handleSave} disabled={saving} className="btn btn-primary btn-sm rounded-xl px-5 flex items-center gap-2 font-bold disabled:opacity-50">
+            <Save className="w-3.5 h-3.5" /> {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
+      </header>
+
+      {/* WORKSPACE */}
+      <div className="flex-1 min-h-0 relative flex">
+        
+        {/* === SEQUENCE CANVAS TAB === */}
+        {activeTab === 'sequence' && (
+          <div className="relative flex-1 flex w-full h-full">
+            {/* The Pan/Scroll canvas */}
+            <div 
+              ref={panRef}
+              className="absolute inset-0 overflow-auto custom-scrollbar cursor-grab active:cursor-grabbing bg-[#05050A]"
+              onMouseDown={onMouseDownPan}
+              onMouseMove={onMouseMovePan}
+              onMouseUp={onMouseUpPan}
+              onMouseLeave={onMouseUpPan}
+              // Subtle grid background overlay directly in div style
+              style={{
+                backgroundImage: 'radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px)',
+                backgroundSize: '30px 30px'
+              }}
+            >
+              <div 
+                className="relative mx-auto my-0 scale-[0.85] origin-top transform-gpu" 
+                style={{ width: layout.bounds.width, height: layout.bounds.height, minWidth: '100vw', minHeight: '100vh' }}
+              >
+                {/* 1. Edges (SVG) */}
+                <svg className="absolute inset-0 pointer-events-none z-0" style={{ width: '100%', height: '100%' }}>
+                  <defs>
+                    <marker id="arrow-yes" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                       <path d="M 0 0 L 10 5 L 0 10 z" fill="#10b981" />
+                    </marker>
+                    <marker id="arrow-no" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                       <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef4444" />
+                    </marker>
+                    <marker id="arrow-def" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                       <path d="M 0 0 L 10 5 L 0 10 z" fill="#3b82f6" opacity="0.4" />
+                    </marker>
+                  </defs>
+
+                  {layout.edges.map(e => {
+                    const sx = e.sourcePos.x
+                    // If source is branching, start the arrow slightly lower because of the split boxes
+                    const sy = e.sourcePos.y + (NODE_H/2) + (e.sourceHasBranching ? COND_H : 0)
+                    const tx = e.targetPos.x
+                    const ty = e.targetPos.y - (NODE_H/2) - 4 // spacing for arrowhead
+
+                    const midY = sy + ((ty - sy) / 2)
+                    const d = `M ${sx} ${sy} C ${sx} ${midY}, ${tx} ${midY}, ${tx} ${ty}`
+                    
+                    const isYes = e.label === 'YES'
+                    const isNo = e.label === 'NO'
+                    const color = isYes ? '#10b981' : isNo ? '#ef4444' : '#3b82f6'
+                    const marker = isYes ? 'url(#arrow-yes)' : isNo ? 'url(#arrow-no)' : 'url(#arrow-def)'
+
+                    return (
+                      <g key={e.source + '-' + e.target}>
+                        <path 
+                          d={d} 
+                          fill="none" 
+                          stroke={color} 
+                          strokeWidth="2.5"
+                          opacity={isYes||isNo ? 0.8 : 0.4}
+                          markerEnd={marker} 
+                          className={isYes||isNo ? '' : 'stroke-dasharray-4'}
+                        />
+                        {e.label && (
+                          <g transform={`translate(${sx + (tx - sx)*0.2}, ${sy + (ty - sy)*0.2})`}>
+                            <rect x="-14" y="-8" width="28" height="16" rx="4" fill="#0f111a" />
+                            <text textAnchor="middle" dy="4" fontSize="9" fontWeight="800" fill={color}>{e.label}</text>
+                          </g>
+                        )}
+                      </g>
+                    )
+                  })}
+                </svg>
+
+                {/* 2. Nodes */}
+                {layout.nodes.map(node => {
+                  const typeDef = ACTION_TYPES[node.type] || ACTION_TYPES.end
+                  const Icon = typeDef.icon
+                  const isSelected = selectedNodeId === node.id
+                  const isEnd = typeDef.isTerminal
+
+                  return (
+                    <div 
+                      key={node.id}
+                      className="absolute group z-10 node-interactive"
+                      style={{ 
+                        left: node.x, top: node.y, 
+                        transform: 'translate(-50%, -50%)', 
+                        width: NODE_W 
+                      }}
+                    >
+                      {/* NODE CARD */}
+                      <div 
+                        onClick={() => setSelectedNodeId(node.id)}
+                        className={`
+                          relative w-full rounded-2xl bg-bg-surface border shadow-2xl cursor-pointer transition-all duration-300 overflow-hidden
+                          ${isSelected ? \`ring-2 ring-primary border-transparent\` : \`border-border/50 hover:border-border\`}
+                        `}
+                      >
+                        <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundColor: typeColors[node.type] }} />
+
+                        <div className="p-4 flex items-center gap-4 relative z-10">
+                          
+                          <div className="w-12 h-12 rounded-xl flex items-center justify-center border shadow-inner shrink-0 bg-bg-secondary"
+                               style={{ borderColor: \`\${typeColors[node.type]}30\` }}>
+                            <Icon className="w-5 h-5 pointer-events-none" style={{ color: typeColors[node.type] }} />
+                          </div>
+
+                          <div className="flex-1 min-w-0 pr-4">
+                             <div className="text-[10px] font-black text-text-muted/60 uppercase tracking-widest mb-1 leading-none">{node.type.replace('_',' ')}</div>
+                             <h4 className="text-[14px] font-bold text-text-primary truncate leading-tight tracking-tight">{typeDef.label}</h4>
+                          </div>
+                        </div>
+
+                        {/* DELETE BUTTON (Hover) */}
+                        {!isSelected && node.type !== 'start' && (
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); attemptDelete(node.id); }}
+                            className="absolute -right-2 -top-2 w-8 h-8 rounded-full bg-danger/10 border border-danger/30 text-danger flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all hover:bg-danger hover:text-white z-20"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         )}
                       </div>
-                      {lead.connectionDegree && (
-                        <span className="text-[10px] px-1.5 py-0.5 bg-border/20 text-text-muted rounded border border-border/30 font-medium">{lead.connectionDegree}</span>
+
+                      {/* BRANCH UI OR ADD BUTTON (Only if not terminal) */}
+                      {!isEnd && (
+                        <div className="absolute left-0 right-0 flex justify-center mt-3 pointer-events-auto">
+                           {typeDef.hasBranching ? (
+                             // Splitting UI 
+                             <div className="flex w-[80%] justify-between mt-1 relative">
+                               {/* Central line coming down */}
+                               <div className="absolute left-1/2 bottom-[110%] w-px h-[20px] bg-border -translate-x-1/2 pointer-events-none" />
+                               
+                               {/* YES ADD */}
+                               {!node.yesChild ? (
+                                  <button onClick={() => setShowPicker({ parentId: node.id, branch: 'yes' })} 
+                                          className="w-10 h-10 rounded-xl bg-success/10 border border-success/30 text-success hover:bg-success hover:text-white transition-all flex items-center justify-center shadow-lg ml-auto">
+                                    <Plus className="w-4 h-4"/>
+                                  </button>
+                               ) : <div className="w-10" />}
+
+                               {/* NO ADD */}
+                               {!node.noChild ? (
+                                  <button onClick={() => setShowPicker({ parentId: node.id, branch: 'no' })} 
+                                          className="w-10 h-10 rounded-xl bg-danger/10 border border-danger/30 text-danger hover:bg-danger hover:text-white transition-all flex items-center justify-center shadow-lg mr-auto">
+                                    <Plus className="w-4 h-4"/>
+                                  </button>
+                               ) : <div className="w-10" />}
+                             </div>
+                           ) : (
+                             // Linear Add UI
+                             !node.yesChild && (
+                               <button onClick={() => setShowPicker({ parentId: node.id, branch: 'yes' })} 
+                                       className="w-10 h-10 rounded-xl bg-bg-surface border border-border text-text-muted hover:bg-bg-elevated hover:border-primary/50 hover:text-primary transition-all flex items-center justify-center shadow-xl">
+                                 <Plus className="w-4 h-4"/>
+                               </button>
+                             )
+                           )}
+                        </div>
+                      )}
+
+                      {/* Confirm Delete Overlay Bubble */}
+                      {confirmDeleteId === node.id && (
+                        <div className="absolute top-0 right-[-270px] w-64 bg-bg-surface p-4 rounded-xl shadow-2xl z-50 text-sm border border-border pointer-events-auto shadow-[0_0_40px_rgba(0,0,0,0.5)]">
+                           <div className="font-bold mb-2 flex items-center gap-2"><AlertCircle className="w-4 h-4 text-danger"/> Delete branch?</div>
+                           <div className="text-text-muted mb-4 text-xs">All downstream modules will be destroyed. This cannot be undone.</div>
+                           <div className="flex gap-2">
+                             <button onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null); }} className="flex-1 btn btn-secondary py-1.5 px-0 h-auto text-xs">Cancel</button>
+                             <button onClick={(e) => { e.stopPropagation(); handleDeleteSubtree(node.id); }} className="flex-1 btn bg-danger/10 text-danger border-danger/30 hover:bg-danger hover:text-white py-1.5 px-0 h-auto text-xs">Purge</button>
+                           </div>
+                        </div>
                       )}
                     </div>
-                    <div className="text-[11px] text-text-muted truncate mt-0.5">
-                      {lead.title ? `${lead.title} @ ${lead.company}` : lead.linkedinUrl}
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* ACTION PICKER MODAL */}
+            {showPicker && (
+               <div className="absolute inset-0 bg-black/60 backdrop-blur z-50 flex items-center justify-center animate-in fade-in cursor-default node-interactive" onClick={() => setShowPicker(null)}>
+                  <div className="bg-bg-surface w-full max-w-3xl rounded-[2rem] border border-border/50 shadow-2xl p-8 transform animate-in zoom-in-95" onClick={e => e.stopPropagation()}>
+                     <div className="flex justify-between items-center mb-6">
+                       <div>
+                         <h2 className="text-xl font-bold text-text-primary">Add Module</h2>
+                         <p className="text-sm text-text-muted">Select the next action to perform</p>
+                       </div>
+                       <button onClick={() => setShowPicker(null)} className="p-2 hover:bg-bg-elevated rounded-xl text-text-muted transition-colors"><X className="w-5 h-5"/></button>
+                     </div>
+                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                       {Object.entries(ACTION_TYPES).filter(([k,v]) => k!=='start').map(([key, config]) => {
+                         const Icon = config.icon
+                         return (
+                           <button
+                             key={key}
+                             onClick={() => handleAddAction(key)}
+                             className="p-4 rounded-2xl border border-border/50 bg-bg-secondary hover:bg-bg-elevated hover:border-border transition-all text-left group relative overflow-hidden"
+                           >
+                             <div className="absolute inset-0 opacity-[0.02] group-hover:opacity-[0.05] transition-opacity" style={{ backgroundColor: typeColors[key] }} />
+                             
+                             <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3 shadow-inner bg-bg-surface border border-border/50">
+                               <Icon className="w-5 h-5 pointer-events-none" style={{ color: typeColors[key] }} />
+                             </div>
+                             <h4 className="text-sm font-bold text-text-primary mb-1 group-hover:text-primary-light transition-colors">{config.label}</h4>
+                             {config.hasBranching && <div className="text-[10px] text-info uppercase tracking-widest font-black mt-2 bg-info/10 inline-block px-2 py-0.5 rounded-md">Branching</div>}
+                           </button>
+                         )
+                       })}
+                     </div>
+                  </div>
+               </div>
+            )}
+
+            {/* CONFIG HUD (Right Sidebar) */}
+            {selectedNodeId && tree?.nodes[selectedNodeId] && (
+               <div className="absolute right-6 top-6 bottom-6 w-80 bg-bg-surface/95 backdrop-blur-xl border border-border rounded-[2rem] shadow-2xl flex flex-col z-40 animate-in slide-in-from-right overflow-hidden node-interactive">
+                  {(() => {
+                    const node = tree.nodes[selectedNodeId]
+                    const typeDef = ACTION_TYPES[node.type]
+                    const Icon = typeDef.icon
+                    return (
+                      <>
+                        <div className="p-6 border-b border-border/50 shrink-0 bg-bg-secondary/50">
+                          <div className="flex justify-between items-start mb-4">
+                             <div className="flex gap-3 items-center">
+                                <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-bg-surface border border-border/50 shadow-sm" style={{ color: typeColors[node.type] }}>
+                                   <Icon className="w-5 h-5"/>
+                                </div>
+                                <div>
+                                   <div className="text-[9px] font-black text-text-muted/60 uppercase tracking-[0.2em] mb-0.5">Module Settings</div>
+                                   <h3 className="text-[15px] font-bold text-text-primary leading-tight">{typeDef.label}</h3>
+                                </div>
+                             </div>
+                             <button onClick={() => setSelectedNodeId(null)} className="text-text-muted hover:text-text-primary bg-bg-surface p-1.5 rounded-lg border border-border/50"><X className="w-4 h-4"/></button>
+                          </div>
+                          {typeDef.hasBranching && (
+                             <div className="bg-info/10 border border-info/20 p-3 rounded-xl flex gap-2">
+                               <AlertCircle className="w-4 h-4 text-info shrink-0"/>
+                               <p className="text-[11px] text-info font-medium leading-tight">Flow splits based on <span className="underline font-bold delay-100">{typeDef.conditionLabel}</span></p>
+                             </div>
+                          )}
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar bg-bg-surface">
+                           {typeDef.configFields.length === 0 ? (
+                             <div className="text-center py-10 opacity-50">
+                               <Hash className="w-6 h-6 mx-auto mb-3 text-text-muted"/>
+                               <p className="text-[11px] uppercase tracking-widest font-black text-text-muted">No configurations</p>
+                             </div>
+                           ) : (
+                             typeDef.configFields.map(f => {
+                               if (f.showIf && !node.config?.[f.showIf]) return null
+                               if (f.type === 'textarea') return (
+                                 <div key={f.key}>
+                                    <label className="text-[10px] font-black uppercase text-text-muted tracking-widest block mb-2">{f.label}</label>
+                                    <textarea 
+                                      className="w-full bg-bg-secondary border border-border rounded-xl p-3 text-sm text-text-primary focus:border-primary outline-none min-h-[140px] resize-y placeholder:text-text-muted/40"
+                                      value={node.config?.[f.key] || ''}
+                                      onChange={e => handleUpdateConfig(node.id, f.key, e.target.value)}
+                                      placeholder={f.placeholder}
+                                    />
+                                    <div className="flex flex-wrap gap-2 mt-2">
+                                      {['firstName', 'lastName', 'company'].map(tag => (
+                                        <button 
+                                          key={tag}
+                                          onClick={() => handleUpdateConfig(node.id, f.key, (node.config?.[f.key] || '') + \` {{\${tag}}}\`)}
+                                          className="px-2.5 py-1 rounded bg-bg-secondary border border-border/50 text-[10px] font-bold text-text-muted hover:text-primary-light hover:border-primary/30 transition-all font-mono"
+                                        >
+                                          + {tag}
+                                        </button>
+                                      ))}
+                                    </div>
+                                 </div>
+                               )
+                               if (f.type === 'number') return (
+                                 <div key={f.key} className="flex justify-between items-center bg-bg-secondary p-3 rounded-xl border border-border/50">
+                                    <label className="text-[10px] font-black uppercase text-text-muted tracking-widest">{f.label}</label>
+                                    <input type="number" min={f.min} max={f.max}
+                                           className="w-16 bg-bg-surface flex items-center text-center font-bold outline-none border border-border rounded-lg py-1.5 px-2 focus:border-primary text-text-primary [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                           value={node.config?.[f.key] ?? f.default}
+                                           onChange={e => handleUpdateConfig(node.id, f.key, parseInt(e.target.value)||f.default)} />
+                                 </div>
+                               )
+                               if (f.type === 'toggle') return (
+                                 <div key={f.key} className="flex justify-between items-center bg-bg-secondary p-4 rounded-xl border border-border/50 cursor-pointer hover:bg-bg-elevated transition-colors" onClick={() => handleUpdateConfig(node.id, f.key, !node.config?.[f.key])}>
+                                   <label className="text-xs font-bold text-text-primary pointer-events-none">{f.label}</label>
+                                   <div className={`w-10 h-5 rounded-full p-1 transition-all shadow-inner ${node.config?.[f.key] ? 'bg-primary' : 'bg-border'}`}>
+                                      <div className={`w-3 h-3 bg-white rounded-full transition-transform shadow-sm ${node.config?.[f.key] ? 'translate-x-[20px]' : 'translate-x-0'}`} />
+                                   </div>
+                                 </div>
+                               )
+                             })
+                           )}
+                        </div>
+                        {node.type !== 'start' && (
+                           <div className="p-5 shrink-0 border-t border-border/50 bg-bg-secondary/30">
+                              <button onClick={() => attemptDelete(node.id)} className="w-full py-2.5 rounded-xl bg-danger/5 border border-danger/20 text-danger hover:bg-danger hover:text-white transition-all font-bold text-xs flex justify-center items-center gap-2">
+                                <Trash2 className="w-4 h-4"/> Destroy Module
+                              </button>
+                           </div>
+                        )}
+                      </>
+                    )
+                  })()}
+               </div>
+            )}
+          </div>
+        )}
+
+        {/* === LEADS TAB (Legacy compatibility) === */}
+        {activeTab === 'leads' && (
+          <div className="w-full h-full p-8 overflow-y-auto custom-scrollbar">
+             <div className="max-w-4xl mx-auto space-y-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-text-primary mb-2">Enrolled Leads</h2>
+                  <p className="text-text-muted text-sm">Leads currently traversing this campaign sequence. Enrollment handled via Contacts page.</p>
+                </div>
+                {enrolledLeads.length === 0 ? (
+                  <div className="glass-card p-12 text-center text-text-muted border border-border/50">
+                     <UserMinus className="w-12 h-12 mx-auto mb-4 opacity-30"/>
+                     <p className="font-bold">No leads enrolled.</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                     {enrolledLeads.map(lead => (
+                       <div key={lead.id} className="glass-card p-4 rounded-xl flex items-center justify-between hover:border-border transition-colors">
+                         <div className="flex items-center gap-4">
+                           {lead.avatar ? (
+                             <img src={lead.avatar} alt="" className="w-10 h-10 rounded-full bg-bg-secondary object-cover" />
+                           ) : (
+                             <div className="w-10 h-10 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center">
+                               {lead.firstName?.[0]}{lead.lastName?.[0]}
+                             </div>
+                           )}
+                           <div>
+                              <div className="font-bold text-text-primary text-[15px]">{lead.firstName} {lead.lastName}</div>
+                              <div className="text-xs text-text-muted mt-0.5">{lead.title} {lead.company ? \`at \${lead.company}\` : ''} 
+                                {lead.isPremium ? <span className="text-accent ml-2 text-[9px] bg-accent/10 px-1.5 py-0.5 rounded font-black uppercase inline-block -translate-y-[1px]">Premium</span> : ''}
+                              </div>
+                           </div>
+                         </div>
+                         <div className="flex items-center gap-3">
+                           <span className={`px-2.5 py-1 text-[10px] font-black uppercase tracking-widest rounded-lg flex items-center ${lead.verification_status === 'verified' ? 'bg-success/10 text-success' : lead.verification_status === 'error' ? 'bg-danger/10 text-danger' : 'bg-warning/10 text-warning'}`}>
+                             {lead.verification_status}
+                           </span>
+                           {lead.linkedinUrl && (
+                             <a href={lead.linkedinUrl} target="_blank" rel="noreferrer" className="btn btn-secondary py-1.5 px-3 text-xs h-auto bg-bg-surface border-border/50 text-text-muted hover:text-text-primary">Profile</a>
+                           )}
+                         </div>
+                       </div>
+                     ))}
+                  </div>
+                )}
+             </div>
+          </div>
+        )}
+
+        {/* === SCHEDULE TAB === */}
+        {activeTab === 'schedule' && (
+          <div className="w-full h-full p-8 overflow-y-auto custom-scrollbar">
+             <div className="max-w-2xl mx-auto space-y-8">
+                <div>
+                  <h2 className="text-2xl font-bold text-text-primary mb-2">Execution Schedule</h2>
+                  <p className="text-text-muted text-sm">Define when the automation engine is allowed to perform actions for this campaign.</p>
+                </div>
+
+                <div className="space-y-6 glass-card rounded-[2rem] p-8">
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-text-muted tracking-widest block mb-4 ml-1">Active Days</label>
+                    <div className="flex gap-2">
+                      {['mon','tue','wed','thu','fri','sat','sun'].map(day => {
+                        const active = schedule.days?.includes(day)
+                        return (
+                          <button key={day} onClick={() => {
+                            const newDays = active ? schedule.days.filter(d => d !== day) : [...(schedule.days||[]), day]
+                            setSchedule(s => ({...s, days: newDays}))
+                          }}
+                          className={`flex-1 py-3 rounded-xl border font-bold text-xs uppercase transition-all ${active ? 'bg-primary border-primary text-white shadow-lg shadow-primary/20' : 'bg-bg-surface border-border/50 text-text-muted hover:bg-bg-elevated'}`}>
+                            {day}
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    {lead.verification_status === 'verified' ? (
-                      <button
-                        onClick={() => handleVerifyLead(lead.id, true)}
-                        disabled={verifying}
-                        className="btn btn-secondary !px-2.5 !py-1.5 !text-[10px] h-auto font-bold"
-                      >
-                        Reverify
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleVerifyLead(lead.id, false)}
-                        disabled={verifying || lead.verification_status === 'verifying' || lead.verification_status === 'pending'}
-                        className="btn btn-primary !px-2.5 !py-1.5 !text-[10px] h-auto font-bold"
-                      >
-                        {lead.verification_status === 'failed' ? 'Retry' : 'Verify'}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => handleRemoveLead(lead.id)}
-                      className="p-2 rounded-xl border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-colors"
-                      title="Remove Lead"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                  <div className="grid grid-cols-2 gap-6 pt-4 border-t border-border/50">
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-text-muted tracking-widest block mb-3 ml-1">Start Time</label>
+                      <input type="time" className="w-full bg-bg-surface border border-border/50 rounded-xl p-3.5 text-text-primary focus:border-primary outline-none text-sm font-bold shadow-inner" 
+                             value={schedule.startTime || ''} onChange={e => setSchedule(s => ({...s, startTime: e.target.value}))}/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-text-muted tracking-widest block mb-3 ml-1">End Time</label>
+                      <input type="time" className="w-full bg-bg-surface border border-border/50 rounded-xl p-3.5 text-text-primary focus:border-primary outline-none text-sm font-bold shadow-inner" 
+                             value={schedule.endTime || ''} onChange={e => setSchedule(s => ({...s, endTime: e.target.value}))}/>
+                    </div>
+                  </div>
+
+                  <div className="pt-4 border-t border-border/50">
+                    <label className="text-[10px] font-black uppercase text-text-muted tracking-widest block mb-3 ml-1">Timezone</label>
+                    <select className="w-full bg-bg-surface border border-border/50 rounded-xl p-3.5 text-text-primary focus:border-primary outline-none text-sm font-bold shadow-inner appearance-none custom-select-arrow"
+                            value={schedule.timezone || ''} onChange={e => setSchedule(s => ({...s, timezone: e.target.value}))}>
+                      <option value="UTC">UTC (GMT)</option>
+                      <option value="UTC-5">EST (UTC-5)</option>
+                      <option value="UTC-8">PST (UTC-8)</option>
+                      <option value="UTC+1">CET (UTC+1)</option>
+                      <option value="UTC+5:30">IST (UTC+5:30)</option>
+                      <option value="UTC+6">Dhaka (UTC+6)</option>
+                    </select>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+             </div>
+          </div>
+        )}
+
       </div>
 
-      {/* ─── Section 3: Schedule ─── */}
-      <div className="glass-card p-5 hover:transform-none !bg-bg-surface/20 border-white/5">
-        <div className="flex items-center gap-2 mb-4">
-          <div className="w-7 h-7 rounded-lg bg-success/20 flex items-center justify-center text-sm font-bold text-success">3</div>
-          <h2 className="text-sm font-bold text-text-primary">Set Schedule</h2>
-          <span className="text-[11px] text-text-muted ml-1">When should this campaign run?</span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {/* Time Range */}
-          <div className="space-y-3">
-            <label className="text-xs font-medium text-text-secondary">Active Hours</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="time"
-                className="input !text-xs !py-2 !w-auto"
-                value={schedule.startTime}
-                onChange={(e) => setSchedule(p => ({ ...p, startTime: e.target.value }))}
-              />
-              <span className="text-xs text-text-muted">to</span>
-              <input
-                type="time"
-                className="input !text-xs !py-2 !w-auto"
-                value={schedule.endTime}
-                onChange={(e) => setSchedule(p => ({ ...p, endTime: e.target.value }))}
-              />
-            </div>
-          </div>
-
-          {/* Active Days */}
-          <div className="space-y-3">
-            <label className="text-xs font-medium text-text-secondary">Active Days</label>
-            <div className="flex gap-1.5 flex-wrap">
-              {DAY_OPTIONS.map(({ key, label }) => (
-                <button
-                  key={key}
-                  onClick={() => toggleDay(key)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                    schedule.days.includes(key)
-                      ? 'bg-primary/20 text-primary-light border border-primary/30'
-                      : 'bg-bg-secondary text-text-muted border border-border hover:border-border-light'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Timezone */}
-          <div className="space-y-3">
-            <label className="text-xs font-medium text-text-secondary">Timezone</label>
-            <select
-              className="input !text-xs !py-2"
-              value={schedule.timezone}
-              onChange={(e) => setSchedule(p => ({ ...p, timezone: e.target.value }))}
-            >
-              <option value="UTC-12">UTC-12 (Baker Island)</option>
-              <option value="UTC-8">UTC-8 (Pacific)</option>
-              <option value="UTC-7">UTC-7 (Mountain)</option>
-              <option value="UTC-6">UTC-6 (Central)</option>
-              <option value="UTC-5">UTC-5 (Eastern)</option>
-              <option value="UTC-4">UTC-4 (Atlantic)</option>
-              <option value="UTC+0">UTC+0 (London)</option>
-              <option value="UTC+1">UTC+1 (Paris)</option>
-              <option value="UTC+2">UTC+2 (Cairo)</option>
-              <option value="UTC+3">UTC+3 (Moscow)</option>
-              <option value="UTC+4">UTC+4 (Dubai)</option>
-              <option value="UTC+5">UTC+5 (Karachi)</option>
-              <option value="UTC+5:30">UTC+5:30 (Mumbai)</option>
-              <option value="UTC+6">UTC+6 (Dhaka)</option>
-              <option value="UTC+7">UTC+7 (Bangkok)</option>
-              <option value="UTC+8">UTC+8 (Singapore)</option>
-              <option value="UTC+9">UTC+9 (Tokyo)</option>
-              <option value="UTC+10">UTC+10 (Sydney)</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="mt-4 bg-info/5 border border-info/20 rounded-xl p-3 text-xs text-info flex items-start gap-2">
-          <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <span>The campaign will only execute actions during the selected hours and days. Outside these windows, leads will queue until the next active period.</span>
-        </div>
-      </div>
-
-
-      {/* Action Picker Modal */}
-      {showPicker && (
-        <div className="modal-overlay z-[120] p-4 flex items-center justify-center overflow-y-auto">
-          <div className="glass-card max-w-2xl w-full p-8 relative animate-in zoom-in duration-300">
-            <button 
-              onClick={() => setShowPicker(null)} 
-              className="absolute top-4 right-4 p-2 hover:bg-white/5 rounded-xl transition-colors text-text-muted hover:text-text-primary"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            
-            <div className="flex items-center gap-4 mb-8">
-              <div className="w-12 h-12 rounded-2xl bg-primary/20 flex items-center justify-center">
-                <Plus className="w-6 h-6 text-primary" />
-              </div>
-              <div>
-                <h2 className="text-xl font-bold text-text-primary">Add Campaign Step</h2>
-                <p className="text-sm text-text-muted">Select the next action in your sequence</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Object.entries(ACTION_TYPES)
-                .filter(([k]) => k !== 'end' && k !== 'start')
-                .map(([key, type]) => {
-                  const Icon = type.icon;
-                  return (
-                    <button 
-                      key={key}
-                      onClick={() => handleSelectAction(key)}
-                      className={`flex flex-col items-center gap-4 p-6 rounded-2xl bg-bg-surface/40 border border-white/5 hover:border-primary/50 hover:bg-primary/10 transition-all group relative overflow-hidden`}
-                    >
-                      <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                      <div 
-                        className="w-14 h-14 rounded-2xl flex items-center justify-center transition-transform group-hover:scale-110 shadow-lg relative z-10" 
-                        style={{ background: `linear-gradient(135deg, ${type.color}30, ${type.color}10)` }}
-                      >
-                        <Icon className="w-7 h-7" style={{ color: type.color }} />
-                      </div>
-                      <span className="text-sm font-bold text-text-primary relative z-10">{type.label}</span>
-                    </button>
-                  )
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Deletion Warning Modal */}
-      {nodeIdToRemove && (
-        <div className="modal-overlay z-[110]">
-          <div className="modal-content !max-w-md p-6 text-center">
-            <div className="w-16 h-16 rounded-full bg-danger/10 flex items-center justify-center mx-auto mb-5">
-              <AlertCircle className="w-8 h-8 text-danger" />
-            </div>
-            <h3 className="text-xl font-bold text-text-primary mb-3">Delete Steps?</h3>
-            <p className="text-sm text-text-muted mb-8 leading-relaxed">
-              This step has subsequent actions connected to it. Deleting it will also remove <strong>all downstream steps</strong> in this branch. This action cannot be undone.
-            </p>
-            <div className="flex gap-3">
-              <button 
-                onClick={() => setNodeIdToRemove(null)}
-                className="flex-1 btn btn-secondary !py-3 font-bold"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={() => performDelete(nodeIdToRemove)}
-                className="flex-1 btn bg-danger hover:bg-danger-light text-white !py-3 font-bold shadow-lg shadow-danger/20"
-              >
-                Yes, Delete All
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Toast Notification */}
+      {/* TOAST */}
       {toastMsg && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[100] animate-fade-in pointer-events-none">
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 animate-fade-in pointer-events-none">
           <div className={`flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl border ${
-            toastMsg.type === 'error' 
-              ? 'bg-danger/10 border-danger/20 text-danger' 
-              : 'bg-success/10 border-success/20 text-success'
+            toastMsg.type === 'error' ? 'bg-danger/10 border-danger/30 text-danger backdrop-blur-md' : 'bg-success/10 border-success/30 text-success backdrop-blur-md'
           }`}>
-            {toastMsg.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
-            <p className="text-[14px] font-medium">{toastMsg.text}</p>
+            <p className="text-[14px] font-bold">{toastMsg.text}</p>
           </div>
         </div>
       )}
     </div>
   )
 }
-

@@ -28,7 +28,7 @@ class CampaignEngine {
     try {
       const now = new Date().toISOString();
       const query = `
-        SELECT cl.*, c.sequence, c.status as campaign_status
+        SELECT cl.*, c.sequence, c.status as campaign_status, c.schedule
         FROM campaign_leads cl
         JOIN campaigns c ON cl.campaign_id = c.id
         WHERE cl.status = 'active'
@@ -42,10 +42,54 @@ class CampaignEngine {
       }
 
       for (const leadState of pendingLeads) {
+        if (!this.isWithinSchedule(leadState.schedule)) {
+          console.log(`⏳ Campaign ${leadState.campaign_id} outside schedule. Skipping lead ${leadState.lead_id} for now.`);
+          continue;
+        }
         await this.processLead(leadState);
       }
     } catch (err) {
       console.error('⚙️ Engine processing error:', err);
+    }
+  }
+
+  isWithinSchedule(scheduleJson) {
+    if (!scheduleJson) return true;
+    try {
+      const schedule = JSON.parse(scheduleJson);
+      if (!schedule.days || !schedule.startTime || !schedule.endTime) return true;
+
+      const now = new Date();
+      let offsetHours = 0;
+      let offsetMinutes = 0;
+
+      // Handle custom UTC formats like "UTC+6", "UTC-5", "UTC+5:30"
+      if (schedule.timezone && schedule.timezone.startsWith('UTC')) {
+        const match = schedule.timezone.match(/UTC([+-])(\d+)(?::(\d+))?/);
+        if (match) {
+          const sign = match[1] === '+' ? 1 : -1;
+          offsetHours = parseInt(match[2], 10) * sign;
+          if (match[3]) offsetMinutes = parseInt(match[3], 10) * sign;
+        }
+      }
+
+      // Convert "now" to the campaign's timezone time by adding offset
+      // Since 'now' gets time in UTC implicitly using getUTCHours, we just add the offset
+      const localNow = new Date(now.getTime() + (offsetHours * 3600000) + (offsetMinutes * 60000));
+      
+      const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+      const currentDay = dayNames[localNow.getUTCDay()];
+
+      if (!schedule.days.includes(currentDay)) return false;
+
+      const currentHour = localNow.getUTCHours();
+      const currentMin = localNow.getUTCMinutes();
+      const currentTimeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
+
+      return currentTimeStr >= schedule.startTime && currentTimeStr <= schedule.endTime;
+    } catch (err) {
+      console.error('⚙️ Schedule check error:', err);
+      return true; // fail open
     }
   }
 
