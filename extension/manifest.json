@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn Automation Bridge",
+  "version": "1.0.0",
+  "description": "Connects your local automation tool securely with your active LinkedIn session.",
+  "permissions": [
+    "cookies",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.linkedin.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/index.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.linkedin.com/*"],
+      "js": ["src/content/index.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "index.html"
+  }
+}
