@@ -240,6 +240,27 @@ for (const u of usersWithoutWorkspace) {
   }
 }
 
+// Create jobs queue table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    status TEXT DEFAULT 'pending',
+    priority INTEGER DEFAULT 0,
+    attempts INTEGER DEFAULT 0,
+    maxAttempts INTEGER DEFAULT 3,
+    lastError TEXT DEFAULT '',
+    runAt TEXT DEFAULT (datetime('now')),
+    lockedAt TEXT DEFAULT NULL,
+    completedAt TEXT DEFAULT NULL,
+    createdAt TEXT DEFAULT (datetime('now')),
+    user_id TEXT,
+    campaign_id TEXT,
+    lead_id TEXT
+  );
+`);
+
 // Create Default UI User if no users exist
 const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
 let defaultUserId = '';
