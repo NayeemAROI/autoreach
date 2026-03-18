@@ -739,34 +739,6 @@ export default function Leads() {
 
                           {openMenuId === lead.id && (
                             <div className="absolute right-0 top-full mt-1 w-44 bg-bg-surface border border-border rounded-xl shadow-xl z-50 py-1.5 animate-fade-in">
-                              {/* Verify / Reverify */}
-                              {isVerified ? (
-                                <button
-                                  onClick={() => handleVerifyLead(lead.id, true)}
-                                  disabled={isVerifying}
-                                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-text-secondary hover:text-primary-light hover:bg-primary/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                >
-                                  <RefreshCw className={`w-3.5 h-3.5 ${isVerifying ? 'animate-spin' : ''}`} />
-                                  Reverify
-                                </button>
-                              ) : (
-                                <button
-                                  onClick={() => handleVerifyLead(lead.id, false)}
-                                  disabled={isVerifying}
-                                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs text-text-secondary hover:text-success hover:bg-success/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                                >
-                                  {isVerifying ? (
-                                    <div className="w-3.5 h-3.5 border-2 border-warning border-t-transparent rounded-full animate-spin"></div>
-                                  ) : (
-                                    <ShieldCheck className="w-3.5 h-3.5" />
-                                  )}
-                                  {isVerifying ? 'Verifying...' : lead.verification_status === 'failed' ? 'Retry Verify' : 'Verify'}
-                                </button>
-                              )}
-
-                              {/* Divider */}
-                              <div className="h-px bg-border/50 my-1.5 mx-3"></div>
-
                               {/* Delete */}
                               <button
                                 onClick={() => handleDeleteLead(lead.id)}
