@@ -10,6 +10,7 @@ import Settings from './pages/Settings'
 import Billing from './pages/Billing'
 import Inbox from './pages/Inbox'
 import Integrations from './pages/Integrations'
+import Analytics from './pages/Analytics'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import ForgotPassword from './pages/ForgotPassword'
@@ -83,6 +84,11 @@ function App() {
           <Route path="/integrations" element={
             <ProtectedRoute>
               <DashboardLayout><Integrations /></DashboardLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/analytics" element={
+            <ProtectedRoute>
+              <DashboardLayout><Analytics /></DashboardLayout>
             </ProtectedRoute>
           } />
         </Routes>

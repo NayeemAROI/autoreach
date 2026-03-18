@@ -22,7 +22,7 @@ const navItems = [
   { path: '/campaigns', icon: Rocket, label: 'Campaigns' },
   { path: '/inbox', icon: Mail, label: 'Inbox' },
   { path: '/integrations', icon: Plug, label: 'Integrations' },
-  { path: '/analytics', icon: BarChart3, label: 'Analytics', badge: 'Soon' },
+  { path: '/analytics', icon: BarChart3, label: 'Analytics' },
   { path: '/settings', icon: Settings, label: 'Settings' },
   { path: '/billing', icon: CreditCard, label: 'Billing' },
 ]

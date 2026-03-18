@@ -261,6 +261,24 @@ try {
   db.prepare("ALTER TABLE conversations ADD COLUMN linkedinThreadId TEXT DEFAULT ''").run();
 } catch(e) { /* column already exists */ }
 
+// Events table for conversion tracking
+db.exec(`
+  CREATE TABLE IF NOT EXISTS events (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    lead_id TEXT DEFAULT '',
+    campaign_id TEXT DEFAULT '',
+    type TEXT NOT NULL,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id);
+  CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
+  CREATE INDEX IF NOT EXISTS idx_events_campaign ON events(campaign_id);
+  CREATE INDEX IF NOT EXISTS idx_events_date ON events(created_at);
+`);
+
 // Create jobs queue table
 db.exec(`
   CREATE TABLE IF NOT EXISTS jobs (
