@@ -43,25 +43,15 @@ async function main() {
   console.log('1. Logging in...');
   const loginRes = await fetchJSON('/api/auth/login', {
     method: 'POST',
-    body: { email: 'admin@admin.com', password: 'admin1' }
+    body: { email: 'admin@admin.com', password: '123456' }
   });
 
   if (loginRes.status !== 200) {
-    // Try default credentials
-    const loginRes2 = await fetchJSON('/api/auth/login', {
-      method: 'POST',
-      body: { email: 'admin@example.com', password: 'admin123' }
-    });
-    if (loginRes2.status !== 200) {
-      console.error('   ❌ Login failed with both credential sets:', loginRes.data, loginRes2.data);
-      process.exit(1);
-    }
-    var token = loginRes2.data.token;
-    console.log('   ✅ Logged in with default credentials');
-  } else {
-    var token = loginRes.data.token;
-    console.log('   ✅ Logged in with admin@admin.com');
+    console.error('   ❌ Login failed:', loginRes.data);
+    process.exit(1);
   }
+  var token = loginRes.data.token;
+  console.log('   ✅ Logged in with admin@admin.com');
 
   // Step 2: Check current inbox state
   console.log('\n2. Checking current inbox...');
