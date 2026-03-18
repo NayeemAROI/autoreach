@@ -218,6 +218,22 @@ if (!usersColumns4.some((col) => col.name === "activeWorkspaceId")) {
   }
 }
 
+// Add LinkedIn cookie columns for server-side API access (Phantombuster-style)
+const usersColumns5 = db.prepare("PRAGMA table_info(users)").all();
+if (!usersColumns5.some((col) => col.name === "linkedin_cookie")) {
+  console.log("Migration: Adding linkedin_cookie to users");
+  try {
+    db.prepare("ALTER TABLE users ADD COLUMN linkedin_cookie TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE users ADD COLUMN linkedin_csrf TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE users ADD COLUMN linkedin_cookie_valid INTEGER DEFAULT 0").run();
+    db.prepare("ALTER TABLE users ADD COLUMN linkedin_profile_name TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE users ADD COLUMN linkedin_profile_url TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE users ADD COLUMN linkedin_connected_at TEXT DEFAULT ''").run();
+  } catch(e) {
+    console.warn("LinkedIn cookie migration warning:", e.message);
+  }
+}
+
 // Migrate role values: 'admin' -> 'owner' for first user, keep rest
 const usersWithAdmin = db.prepare("SELECT id FROM users WHERE role = 'admin'").all();
 if (usersWithAdmin.length > 0) {
