@@ -118,40 +118,6 @@ export default function Sidebar() {
             <LogOut className="w-4 h-4" />
           </button>
         </div>
-
-        {/* Usage Indicators */}
-        {usage && (
-          <div className="glass-card p-3 space-y-2">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">Usage</span>
-              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-primary/15 text-primary uppercase">{planName}</span>
-            </div>
-            {[
-              { label: 'Leads', used: usage.leads },
-              { label: 'Campaigns', used: usage.campaigns },
-            ].map((item, i) => (
-              <div key={i} className="flex items-center justify-between text-[11px]">
-                <span className="text-text-muted">{item.label}</span>
-                <span className="text-text-primary font-semibold">{item.used}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Health */}
-        <div className="glass-card p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-2 h-2 rounded-full bg-success pulse-dot"></div>
-            <span className="text-xs font-semibold text-text-secondary">Node Status</span>
-          </div>
-          <div className="progress-bar mb-2">
-            <div className="progress-fill" style={{ width: '100%' }}></div>
-          </div>
-          <div className="flex justify-between text-[11px] text-text-muted">
-            <span>Local Backend</span>
-            <span className="text-success font-semibold">Online</span>
-          </div>
-        </div>
       </div>
     </aside>
   )
