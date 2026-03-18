@@ -311,6 +311,26 @@ if (!leadsColumns.some(col => col.name === 'workspace_id')) {
   }
 }
 
+// Migration: Ensure only the user's active workspace keeps LinkedIn data
+// (the earlier migration incorrectly copied LinkedIn to ALL workspaces)
+try {
+  const allUsers = db.prepare('SELECT id, activeWorkspaceId FROM users WHERE activeWorkspaceId IS NOT NULL AND activeWorkspaceId != \'\'').all();
+  for (const u of allUsers) {
+    const cleared = db.prepare(`
+      UPDATE workspaces SET 
+        linkedin_cookie = '', linkedin_csrf = '', linkedin_cookie_valid = 0,
+        linkedin_profile_name = '', linkedin_profile_url = '', linkedin_member_id = '',
+        linkedin_connected_at = ''
+      WHERE owner_id = ? AND id != ? AND linkedin_cookie != ''
+    `).run(u.id, u.activeWorkspaceId);
+    if (cleared.changes > 0) {
+      console.log(`Migration: Cleared LinkedIn from ${cleared.changes} non-default workspace(s) for user ${u.id}`);
+    }
+  }
+} catch(e) {
+  console.warn('LinkedIn isolation migration warning:', e.message);
+}
+
 // Migration: Add linkedinThreadId to conversations
 try {
   db.prepare("ALTER TABLE conversations ADD COLUMN linkedinThreadId TEXT DEFAULT ''").run();

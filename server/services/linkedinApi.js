@@ -84,7 +84,26 @@ async function validateCookie(li_at) {
   }
 }
 
+// Get user's active workspace ID
+function getActiveWorkspaceId(userId) {
+  const user = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+  return user?.activeWorkspaceId || '';
+}
+
 function saveCookie(userId, li_at, csrf, profileName, profileUrl, memberId) {
+  const wsId = getActiveWorkspaceId(userId);
+  if (wsId) {
+    db.prepare(`
+      UPDATE workspaces SET 
+        linkedin_cookie = ?, linkedin_csrf = ?,
+        linkedin_cookie_valid = 1,
+        linkedin_profile_name = ?, linkedin_profile_url = ?,
+        linkedin_member_id = ?,
+        linkedin_connected_at = datetime('now')
+      WHERE id = ?
+    `).run(li_at, `${csrf}|${memberId}`, profileName, profileUrl, memberId, wsId);
+  }
+  // Also keep user-level for backward compat
   db.prepare(`
     UPDATE users SET 
       linkedin_cookie = ?, linkedin_csrf = ?,
@@ -96,10 +115,26 @@ function saveCookie(userId, li_at, csrf, profileName, profileUrl, memberId) {
 }
 
 function getCookie(userId) {
+  // Read from active workspace first
+  const wsId = getActiveWorkspaceId(userId);
+  if (wsId) {
+    const ws = db.prepare('SELECT linkedin_cookie, linkedin_csrf, linkedin_cookie_valid, linkedin_profile_name, linkedin_profile_url, linkedin_member_id, linkedin_connected_at FROM workspaces WHERE id = ?').get(wsId);
+    if (ws && ws.linkedin_cookie) {
+      const parts = (ws.linkedin_csrf || '').split('|');
+      return {
+        li_at: ws.linkedin_cookie,
+        csrf: parts[0] || '',
+        memberId: ws.linkedin_member_id || parts[1] || '',
+        valid: !!ws.linkedin_cookie_valid,
+        profileName: ws.linkedin_profile_name,
+        profileUrl: ws.linkedin_profile_url,
+        connectedAt: ws.linkedin_connected_at
+      };
+    }
+  }
+  // Fallback to user-level
   const user = db.prepare('SELECT linkedin_cookie, linkedin_csrf, linkedin_cookie_valid, linkedin_profile_name, linkedin_profile_url, linkedin_connected_at FROM users WHERE id = ?').get(userId);
   if (!user || !user.linkedin_cookie) return null;
-  
-  // csrf field stores "csrf|memberId"
   const parts = (user.linkedin_csrf || '').split('|');
   return {
     li_at: user.linkedin_cookie,
@@ -113,6 +148,18 @@ function getCookie(userId) {
 }
 
 function disconnectCookie(userId) {
+  const wsId = getActiveWorkspaceId(userId);
+  if (wsId) {
+    db.prepare(`
+      UPDATE workspaces SET 
+        linkedin_cookie = '', linkedin_csrf = '',
+        linkedin_cookie_valid = 0, linkedin_profile_name = '',
+        linkedin_profile_url = '', linkedin_member_id = '',
+        linkedin_connected_at = ''
+      WHERE id = ?
+    `).run(wsId);
+  }
+  // Also clear user-level
   db.prepare(`
     UPDATE users SET 
       linkedin_cookie = '', linkedin_csrf = '',
