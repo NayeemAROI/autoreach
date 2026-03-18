@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { apiFetch } from '../utils/api'
 import { 
   MessageSquare, Send, ChevronLeft, Search, 
-  User, Clock, Circle, Inbox as InboxIcon 
+  User, Clock, Circle, Inbox as InboxIcon, RefreshCw 
 } from 'lucide-react'
 
 export default function InboxPage() {
@@ -13,13 +13,32 @@ export default function InboxPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const messagesEndRef = useRef(null)
 
-  useEffect(() => {
+  const loadConversations = () => {
     apiFetch('/api/inbox').then(r => r.json())
       .then(data => { setConversations(data.conversations || []); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [])
+  }
+
+  useEffect(() => { loadConversations() }, [])
+
+  const triggerSync = async () => {
+    setSyncing(true)
+    try {
+      const res = await apiFetch('/api/inbox/trigger-sync', { method: 'POST' })
+      const data = await res.json()
+      // Wait a few seconds for messages to come in, then reload
+      setTimeout(() => {
+        loadConversations()
+        setSyncing(false)
+      }, 5000)
+    } catch (err) {
+      console.error(err)
+      setSyncing(false)
+    }
+  }
 
   const openThread = async (conv) => {
     setActiveConv(conv)
@@ -77,7 +96,17 @@ export default function InboxPage() {
             <h2 className="text-lg font-bold text-text-primary flex items-center gap-2">
               <MessageSquare className="w-5 h-5 text-primary" /> Inbox
             </h2>
-            <span className="text-xs text-text-muted">{conversations.length} threads</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={triggerSync} disabled={syncing}
+                className="text-[10px] px-2 py-1 rounded-md bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 flex items-center gap-1"
+                title="Sync messages from LinkedIn"
+              >
+                <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
+                {syncing ? 'Syncing...' : 'Sync'}
+              </button>
+              <span className="text-xs text-text-muted">{conversations.length} threads</span>
+            </div>
           </div>
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />

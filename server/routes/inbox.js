@@ -150,6 +150,21 @@ router.post('/sync', (req, res) => {
   }
 });
 
+// POST /api/inbox/trigger-sync - trigger extension to sync LinkedIn inbox
+router.post('/trigger-sync', (req, res) => {
+  try {
+    const bridge = require('../services/linkedinBridge');
+    const sent = bridge.syncInbox(req.user.id);
+    if (sent) {
+      res.json({ message: 'Sync command sent to extension. Messages will appear shortly.' });
+    } else {
+      res.status(503).json({ error: 'Extension not connected. Please open the Chrome extension.' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/inbox/:id - delete conversation
 router.delete('/:id', (req, res) => {
   try {

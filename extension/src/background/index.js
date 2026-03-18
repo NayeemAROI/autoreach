@@ -28,7 +28,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         connect();
       }
     });
-  } else if (request.type === 'ACTION_COMPLETED' || request.type === 'ACTION_FAILED' || request.type === 'PROFILE_DATA') {
+  } else if (request.type === 'ACTION_COMPLETED' || request.type === 'ACTION_FAILED' || request.type === 'PROFILE_DATA' || request.type === 'MESSAGES_DATA') {
     // Forward from Content Script to backend
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(request));
@@ -158,6 +158,111 @@ async function handleCommand(command) {
   }
   else if (command.type === 'SILENT_VERIFY') {
     handleSilentVerify(command.payload.url, command.payload.leadId);
+  }
+  else if (command.type === 'SEND_MESSAGE') {
+    // Open messaging page and send message via content script
+    sendMessageToContentScript(command.payload.profileUrl, {
+      action: 'sendMessage',
+      message: command.payload.message
+    });
+  }
+  else if (command.type === 'SYNC_INBOX') {
+    // Scrape LinkedIn inbox using Voyager API
+    handleInboxSync();
+  }
+}
+
+// 5. Inbox Sync - Scrape LinkedIn messages using Voyager API
+async function handleInboxSync() {
+  try {
+    if (!session.li_at || !session.JSESSIONID) {
+      console.warn('[Inbox Sync] No LinkedIn session available');
+      return;
+    }
+
+    console.log('[Inbox Sync] Fetching conversations from LinkedIn...');
+    const headers = {
+      'Accept': 'application/vnd.linkedin.normalized+json+2.1',
+      'x-li-lang': 'en_US',
+      'x-restli-protocol-version': '2.0.0',
+      'csrf-token': session.JSESSIONID,
+      'Cookie': `li_at=${session.li_at}; JSESSIONID="${session.JSESSIONID}"`
+    };
+
+    // Fetch recent conversations
+    const convRes = await fetch('https://www.linkedin.com/voyager/api/messaging/conversations?keyVersion=LEGACY_INBOX', {
+      headers, credentials: 'include'
+    });
+
+    if (!convRes.ok) throw new Error(`Conversations fetch failed: ${convRes.status}`);
+    const convData = await convRes.json();
+
+    const messages = [];
+    const conversations = convData.elements || [];
+
+    for (const conv of conversations.slice(0, 20)) { // Last 20 conversations
+      const participants = conv.participants || [];
+      const lastEvent = conv.events?.[0];
+
+      // Get messages for this conversation
+      const convId = conv.entityUrn?.split(':').pop();
+      if (!convId) continue;
+
+      try {
+        const msgRes = await fetch(`https://www.linkedin.com/voyager/api/messaging/conversations/${convId}/events?count=10`, {
+          headers, credentials: 'include'
+        });
+
+        if (msgRes.ok) {
+          const msgData = await msgRes.json();
+          const events = msgData.elements || [];
+
+          // Find participant profile info from included data
+          let participantName = '';
+          let participantUrl = '';
+          const included = convData.included || [];
+          for (const p of participants) {
+            const urn = typeof p === 'string' ? p : p['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile?.entityUrn || p.entityUrn || '';
+            const profileId = urn.split(':').pop();
+            const profile = included.find(i => i.publicIdentifier === profileId || i.entityUrn?.includes(profileId));
+            if (profile && profile.firstName) {
+              participantName = `${profile.firstName} ${profile.lastName || ''}`;
+              participantUrl = `https://www.linkedin.com/in/${profile.publicIdentifier || profileId}`;
+            }
+          }
+
+          for (const evt of events) {
+            const body = evt.eventContent?.['com.linkedin.voyager.messaging.event.MessageEvent'];
+            if (!body) continue;
+
+            const senderUrn = evt.from?.['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile?.entityUrn || evt.from?.entityUrn || '';
+            const isFromMe = senderUrn.includes(conv.hostUrn?.split(':').pop() || '__no_match__');
+
+            messages.push({
+              participantName,
+              participantUrl,
+              content: body.body || body.attributedBody?.text || '',
+              direction: isFromMe ? 'outbound' : 'inbound',
+              linkedinMessageId: evt.entityUrn || '',
+              timestamp: evt.createdAt ? new Date(evt.createdAt).toISOString() : new Date().toISOString()
+            });
+          }
+        }
+      } catch (e) {
+        console.warn(`[Inbox Sync] Failed to fetch messages for conv ${convId}`, e);
+      }
+    }
+
+    console.log(`[Inbox Sync] Scraped ${messages.length} messages from ${conversations.length} conversations`);
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'MESSAGES_DATA',
+        payload: { messages }
+      }));
+    }
+  } catch (err) {
+    console.error('[Inbox Sync] Error:', err.message);
   }
 }
 
