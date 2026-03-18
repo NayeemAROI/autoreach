@@ -36,11 +36,14 @@ export function App() {
     const pollStatus = () => {
       chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (res) => {
         if (chrome.runtime.lastError) {
-          // background might not be ready yet
           return;
         }
         if (res && res.wsStatus) {
           setWsStatus(res.wsStatus)
+          // If disconnected and there's an error, show manual input automatically
+          if (res.wsStatus === 'disconnected' && res.error) {
+            setShowManual(true)
+          }
         } else {
           setWsStatus('disconnected')
         }

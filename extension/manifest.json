@@ -10,7 +10,11 @@
     "storage"
   ],
   "host_permissions": [
-    "*://*.linkedin.com/*"
+    "*://*.linkedin.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "ws://localhost/*",
+    "ws://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "src/background/index.js",

@@ -23,7 +23,10 @@ chrome.storage.local.get(['outreach_token'], (res) => {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'GET_STATUS') {
     sendResponse({
-      wsStatus: ws ? (ws.readyState === WebSocket.OPEN ? 'connected' : (ws.readyState === WebSocket.CONNECTING ? 'connecting' : 'disconnected')) : 'disconnected'
+      wsStatus: ws ? (ws.readyState === WebSocket.OPEN ? 'connected' : (ws.readyState === WebSocket.CONNECTING ? 'connecting' : 'disconnected')) : 'disconnected',
+      error: lastConnectError,
+      hasToken: !!authToken,
+      attempts: connectAttempts
     });
     return true;
   }
@@ -50,8 +53,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // 1. WebSocket Connection Management
+let lastConnectError = '';
+let connectAttempts = 0;
+
 function connect() {
   if (!authToken) {
+    lastConnectError = 'No auth token';
     console.log('[Automation Bridge] Waiting for API Key to be set in Popup...');
     return;
   }
@@ -60,18 +67,39 @@ function connect() {
     return;
   }
 
-  console.log('[Automation Bridge] Connecting to local server...');
-  ws = new WebSocket(`${WS_BASE_URL}?token=${authToken}`);
+  connectAttempts++;
+  console.log(`[Automation Bridge] Connection attempt #${connectAttempts} to ${WS_BASE_URL}...`);
+  
+  try {
+    ws = new WebSocket(`${WS_BASE_URL}?token=${authToken}`);
+  } catch (err) {
+    console.error('[Automation Bridge] WebSocket constructor failed:', err.message);
+    lastConnectError = `Constructor: ${err.message}`;
+    reconnectTimer = setTimeout(connect, 5000);
+    return;
+  }
+
+  // Set a timeout - if still CONNECTING after 5s, something is wrong
+  const connectTimeout = setTimeout(() => {
+    if (ws && ws.readyState === WebSocket.CONNECTING) {
+      console.error('[Automation Bridge] Connection timeout after 5s');
+      lastConnectError = 'Connection timeout - server may be unreachable';
+      try { ws.close(); } catch(e) {}
+    }
+  }, 5000);
 
   ws.onopen = () => {
-    console.log('[Automation Bridge] Connected to backend');
+    clearTimeout(connectTimeout);
+    connectAttempts = 0;
+    lastConnectError = '';
+    console.log('[Automation Bridge] ✅ Connected to backend!');
     clearTimeout(reconnectTimer);
     clearInterval(keepaliveInterval);
     keepaliveInterval = setInterval(() => {
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'PING' }));
       }
-    }, 20000); // 20s keepalive Ping
+    }, 20000);
     updateIcon(true);
     sendSessionToBackend();
   };
@@ -85,17 +113,33 @@ function connect() {
     }
   };
 
-  ws.onclose = () => {
-    console.log('[Automation Bridge] Disconnected from backend');
+  ws.onclose = (event) => {
+    clearTimeout(connectTimeout);
+    console.log(`[Automation Bridge] Disconnected (code: ${event.code}, reason: ${event.reason || 'none'})`);
     clearInterval(keepaliveInterval);
     updateIcon(false);
-    reconnectTimer = setTimeout(connect, 3000); // Reconnect every 3s
+    
+    // If server rejected our token (1008), clear it
+    if (event.code === 1008) {
+      lastConnectError = 'Auth rejected - token may be expired. Use manual token or re-login to web app.';
+      console.error('[Automation Bridge] Token rejected by server. Clearing stale token.');
+      authToken = null;
+      chrome.storage.local.remove('outreach_token');
+      // Don't reconnect with a bad token
+      return;
+    }
+    
+    lastConnectError = `Disconnected (code: ${event.code})`;
+    const delay = Math.min(3000 * connectAttempts, 15000); // Backoff: 3s, 6s, 9s... max 15s
+    reconnectTimer = setTimeout(connect, delay);
   };
 
   ws.onerror = (err) => {
-    console.error('[Automation Bridge] WebSocket error');
+    clearTimeout(connectTimeout);
+    console.error('[Automation Bridge] WebSocket error event fired');
+    lastConnectError = 'Connection error - check if server is running on port 3001';
     clearInterval(keepaliveInterval);
-    ws.close();
+    try { ws.close(); } catch(e) {}
   };
 }
 
