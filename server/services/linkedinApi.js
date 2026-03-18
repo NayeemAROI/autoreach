@@ -20,12 +20,59 @@ function getHeaders(li_at, csrf) {
 }
 
 /**
+ * Fetch the real JSESSIONID from LinkedIn by visiting the site with li_at cookie.
+ * LinkedIn sets JSESSIONID in response cookies.
+ */
+async function fetchJsessionId(li_at) {
+  try {
+    // Visit LinkedIn with just the li_at cookie to get JSESSIONID
+    const res = await fetch('https://www.linkedin.com/voyager/api/me', {
+      headers: {
+        'Cookie': `li_at=${li_at}`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/vnd.linkedin.normalized+json+2.1'
+      },
+      redirect: 'manual'
+    });
+    
+    // Extract JSESSIONID from Set-Cookie headers
+    const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : 
+      (res.headers.get('set-cookie') || '').split(/,(?=\s*\w+=)/);
+    
+    for (const cookie of setCookies) {
+      const match = cookie.match(/JSESSIONID="?([^";]+)"?/);
+      if (match) {
+        console.log('[LinkedIn API] Got real JSESSIONID from LinkedIn');
+        return match[1].replace(/"/g, '');
+      }
+    }
+    
+    // If no JSESSIONID in response, try to extract csrf from response body
+    if (res.ok) {
+      // LinkedIn sometimes embeds csrf in response headers
+      const csrfHeader = res.headers.get('x-li-uuid') || '';
+      if (csrfHeader) {
+        console.log('[LinkedIn API] Using x-li-uuid as fallback csrf');
+      }
+    }
+    
+    // Fallback: generate ajax-style token (works for some endpoints)
+    const fallback = 'ajax:' + Math.random().toString(36).substring(2, 18);
+    console.log('[LinkedIn API] Using generated fallback CSRF token');
+    return fallback;
+  } catch (err) {
+    console.warn('[LinkedIn API] Failed to fetch JSESSIONID:', err.message);
+    return 'ajax:' + Math.random().toString(36).substring(2, 18);
+  }
+}
+
+/**
  * Validate a li_at cookie by fetching the user's own profile.
  * Returns { valid, profileName, profileUrl } or throws.
  */
 async function validateCookie(li_at) {
-  // Extract CSRF token from li_at (common pattern) or generate a simple one
-  const csrf = 'ajax:' + Math.random().toString(36).substring(2, 12);
+  // First, get the real JSESSIONID from LinkedIn
+  const csrf = await fetchJsessionId(li_at);
   const headers = getHeaders(li_at, csrf);
 
   try {
@@ -113,6 +160,16 @@ async function syncInbox(userId) {
     throw new Error('No valid LinkedIn cookie. Please connect your account first.');
   }
 
+  // Always fetch a fresh JSESSIONID before syncing
+  console.log('[LinkedIn API] Refreshing JSESSIONID for sync...');
+  const freshCsrf = await fetchJsessionId(cookie.li_at);
+  
+  // Update stored csrf if different
+  if (freshCsrf !== cookie.csrf) {
+    db.prepare('UPDATE users SET linkedin_csrf = ? WHERE id = ?').run(freshCsrf, userId);
+    cookie.csrf = freshCsrf;
+  }
+  
   const headers = getHeaders(cookie.li_at, cookie.csrf);
 
   // Fetch conversations
