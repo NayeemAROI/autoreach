@@ -2,7 +2,7 @@ let ws = null;
 let reconnectTimer = null;
 let keepaliveInterval = null;
 let authToken = null;
-const WS_BASE_URL = 'ws://localhost:3001';
+const WS_BASE_URL = 'ws://127.0.0.1:3001';
 
 // LinkedIn Session State
 const session = {

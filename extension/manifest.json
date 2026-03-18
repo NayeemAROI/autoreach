@@ -23,8 +23,7 @@
     },
     {
       "matches": [
-        "*://localhost/*",
-        "*://127.0.0.1/*"
+        "<all_urls>"
       ],
       "js": ["src/content/app-sync.js"]
     }
