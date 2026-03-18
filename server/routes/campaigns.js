@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db/database');
 const { v4: uuidv4 } = require('uuid');
 const auth = require('../middleware/auth');
+const { logAction } = require('../services/auditLog');
 
 // Helper: get user's active workspace_id
 function getWorkspaceId(userId) {
@@ -63,6 +64,7 @@ router.post('/', (req, res) => {
     campaign.stats = JSON.parse(campaign.stats);
     campaign.leadIds = JSON.parse(campaign.leadIds);
     campaign.schedule = JSON.parse(campaign.schedule || '{}');
+    logAction(req, 'campaign.created', 'campaign', id, name, { type: type || 'linkedin' });
     res.status(201).json(campaign);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -104,6 +106,7 @@ router.post('/:id/enroll', (req, res) => {
       }
     })();
 
+    logAction(req, 'campaign.leads_enrolled', 'campaign', campaignId, '', { newLeads: leadIds.length, totalEnrolled: newLeadIds.length });
     res.json({ message: `Successfully enrolled leads.`, totalEnrolled: newLeadIds.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -189,6 +192,7 @@ router.put('/:id', (req, res) => {
       campaign.leadIds = JSON.parse(campaign.leadIds);
       campaign.schedule = JSON.parse(campaign.schedule || '{}');
     }
+    logAction(req, 'campaign.updated', 'campaign', req.params.id, campaign?.name || '', { fields: Object.keys(req.body) });
     res.json(campaign);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -199,7 +203,9 @@ router.put('/:id', (req, res) => {
 router.delete('/:id', (req, res) => {
   const userId = req.user.id;
   try {
+    const camp = db.prepare('SELECT name FROM campaigns WHERE id = ? AND user_id = ?').get(req.params.id, userId);
     db.prepare('DELETE FROM campaigns WHERE id = ? AND user_id = ?').run(req.params.id, userId);
+    logAction(req, 'campaign.deleted', 'campaign', req.params.id, camp?.name || '');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

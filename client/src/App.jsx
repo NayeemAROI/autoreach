@@ -11,6 +11,7 @@ import Billing from './pages/Billing'
 import Inbox from './pages/Inbox'
 import Integrations from './pages/Integrations'
 import Analytics from './pages/Analytics'
+import ActivityLog from './pages/ActivityLog'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import ForgotPassword from './pages/ForgotPassword'
@@ -89,6 +90,11 @@ function App() {
           <Route path="/analytics" element={
             <ProtectedRoute>
               <DashboardLayout><Analytics /></DashboardLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/activity-log" element={
+            <ProtectedRoute>
+              <DashboardLayout><ActivityLog /></DashboardLayout>
             </ProtectedRoute>
           } />
         </Routes>

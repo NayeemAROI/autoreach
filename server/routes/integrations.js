@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/auth');
 const linkedinApi = require('../services/linkedinApi');
+const { logAction } = require('../services/auditLog');
 
 // GET /api/integrations/status - Check LinkedIn connection status
 router.get('/status', authenticate, (req, res) => {
@@ -51,6 +52,7 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
     linkedinApi.saveCookie(req.user.id, trimmed, result.csrf, result.profileName, result.profileUrl, result.memberId);
     console.log(`[Integrations] LinkedIn connected for ${result.profileName}`);
     
+    logAction(req, 'integration.linkedin_connected', 'integration', '', result.profileName, { profileUrl: result.profileUrl });
     res.json({
       success: true,
       profileName: result.profileName,
@@ -67,6 +69,7 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
 router.post('/disconnect', authenticate, (req, res) => {
   try {
     linkedinApi.disconnectCookie(req.user.id);
+    logAction(req, 'integration.linkedin_disconnected', 'integration');
     res.json({ success: true, message: 'LinkedIn disconnected.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -78,6 +81,7 @@ router.post('/sync-inbox', authenticate, async (req, res) => {
   try {
     console.log(`[Integrations] Starting inbox sync for user ${req.user.id}...`);
     const result = await linkedinApi.syncInbox(req.user.id);
+    logAction(req, 'integration.inbox_synced', 'integration', '', '', { messages: result.messages, conversations: result.conversations });
     res.json({
       success: true,
       message: `Synced ${result.messages} messages across ${result.conversations} new conversations.`,

@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db/database');
 const { v4: uuidv4 } = require('uuid');
 const auth = require('../middleware/auth');
+const { logAction } = require('../services/auditLog');
 
 router.use(auth);
 
@@ -64,6 +65,7 @@ router.post('/', (req, res) => {
     db.prepare('INSERT INTO workspaces (id, name, slug, owner_id) VALUES (?, ?, ?, ?)').run(wsId, name.trim(), slug, userId);
     db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run(uuidv4(), wsId, userId, 'owner');
 
+    logAction(req, 'workspace.created', 'workspace', wsId, name.trim());
     res.json({
       workspace: { id: wsId, name: name.trim(), slug, linkedinConnected: false },
       message: 'Workspace created! Connect a LinkedIn account to start.'
@@ -88,6 +90,7 @@ router.patch('/:id', (req, res) => {
     db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(name.trim(), id);
   }
 
+    logAction(req, 'workspace.updated', 'workspace', id, name?.trim() || '');
   res.json({ success: true });
 });
 
@@ -125,6 +128,7 @@ router.delete('/:id', (req, res) => {
       }
     }
 
+    logAction(req, 'workspace.deleted', 'workspace', id, ws.name);
     res.json({ success: true, message: 'Workspace and all data deleted.' });
   } catch (e) {
     console.error('Delete workspace error:', e);
@@ -144,6 +148,7 @@ router.post('/:id/switch', (req, res) => {
   db.prepare('UPDATE users SET activeWorkspaceId = ? WHERE id = ?').run(id, userId);
 
   const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
+    logAction(req, 'workspace.switched', 'workspace', id, ws.name);
   res.json({
     success: true,
     workspace: {
@@ -212,6 +217,7 @@ router.post('/:id/connect', async (req, res) => {
       WHERE id = ?
     `).run(liAt, csrf, profileName, profileUrl, memberId, id);
 
+    logAction(req, 'workspace.linkedin_connected', 'workspace', id, profileName, { memberId, profileUrl });
     res.json({
       success: true,
       profileName,
@@ -241,6 +247,7 @@ router.post('/:id/disconnect', (req, res) => {
     WHERE id = ?
   `).run(id);
 
+  logAction(req, 'workspace.linkedin_disconnected', 'workspace', id, ws.linkedin_profile_name || '');
   res.json({ success: true });
 });
 

@@ -331,6 +331,28 @@ try {
   console.warn('LinkedIn isolation migration warning:', e.message);
 }
 
+// Audit log table for comprehensive activity tracking
+db.exec(`
+  CREATE TABLE IF NOT EXISTS audit_log (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    workspace_id TEXT DEFAULT '',
+    action TEXT NOT NULL,
+    entity_type TEXT DEFAULT '',
+    entity_id TEXT DEFAULT '',
+    entity_name TEXT DEFAULT '',
+    details TEXT DEFAULT '{}',
+    ip_address TEXT DEFAULT '',
+    user_agent TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id);
+  CREATE INDEX IF NOT EXISTS idx_audit_workspace ON audit_log(workspace_id);
+  CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
+  CREATE INDEX IF NOT EXISTS idx_audit_date ON audit_log(created_at);
+`);
+
 // Migration: Add linkedinThreadId to conversations
 try {
   db.prepare("ALTER TABLE conversations ADD COLUMN linkedinThreadId TEXT DEFAULT ''").run();

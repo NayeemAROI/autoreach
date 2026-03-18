@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 const { sendVerificationEmail } = require('../services/email');
+const { logAction } = require('../services/auditLog');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_automation_key';
 const ACCESS_TOKEN_EXPIRES = '15m';
@@ -92,6 +93,8 @@ router.post('/register', validateBody(schemas.register), async (req, res) => {
     // Send email asynchronously (mocked for now since it's a code)
     console.log(`✉️ Verification code for ${email}: ${verifyToken}`);
 
+    logAction({ _userId: userId, ip: req.ip, headers: req.headers }, 'auth.register', 'auth', userId, name, { email: email.toLowerCase() });
+
     res.status(201).json({
       message: 'Registration successful! Please check your email to verify your account.',
       requiresVerification: true,
@@ -136,6 +139,8 @@ router.post('/login', validateBody(schemas.login), async (req, res) => {
     // Generate tokens
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user.id);
+
+    logAction({ _userId: user.id, ip: req.ip, headers: req.headers }, 'auth.login', 'auth', user.id, user.name, { email: user.email });
 
     res.json({
       message: 'Login successful',
@@ -239,6 +244,7 @@ router.post('/verify-email', (req, res) => {
     // Delete token
     db.prepare('DELETE FROM email_verifications WHERE id = ?').run(verification.id);
 
+    logAction({ _userId: user.id, ip: req.ip, headers: req.headers }, 'auth.email_verified', 'auth', user.id, '', { email });
     res.json({ message: 'Email successfully verified.' });
   } catch (error) {
     console.error('Verification error:', error);
@@ -311,6 +317,7 @@ router.post('/reset-password', async (req, res) => {
     // Delete token
     db.prepare('DELETE FROM email_verifications WHERE id = ?').run(verification.id);
 
+    logAction({ _userId: user.id, ip: req.ip, headers: req.headers }, 'auth.password_reset', 'auth', user.id, '', { email });
     res.json({ message: 'Password successfully reset' });
   } catch (error) {
     console.error('Reset password error:', error);

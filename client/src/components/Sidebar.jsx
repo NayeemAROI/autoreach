@@ -17,7 +17,8 @@ import {
   ChevronDown,
   Plus,
   Linkedin,
-  Check
+  Check,
+  Activity
 } from 'lucide-react'
 
 const navItems = [
@@ -27,6 +28,7 @@ const navItems = [
   { path: '/inbox', icon: Mail, label: 'Inbox' },
   { path: '/integrations', icon: Plug, label: 'Integrations' },
   { path: '/analytics', icon: BarChart3, label: 'Analytics' },
+  { path: '/activity-log', icon: Activity, label: 'Activity Log' },
   { path: '/settings', icon: Settings, label: 'Settings' },
   { path: '/billing', icon: CreditCard, label: 'Billing' },
 ]

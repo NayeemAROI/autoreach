@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db/database');
 const { v4: uuidv4 } = require('uuid');
 const auth = require('../middleware/auth');
+const { logAction } = require('../services/auditLog');
 
 // Helper: get user's active workspace_id
 function getWorkspaceId(userId) {
@@ -133,6 +134,7 @@ router.post('/', (req, res) => {
     
     const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
     lead.tags = JSON.parse(lead.tags || '[]');
+    logAction(req, 'lead.created', 'lead', id, `${firstName} ${lastName}`, { company, source: source || 'manual' });
     res.status(201).json(lead);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -177,6 +179,7 @@ router.post('/import', (req, res) => {
 
   try {
     const { importedCount, skippedCount } = insertMany(leads);
+    logAction(req, 'lead.bulk_import', 'lead', '', '', { imported: importedCount, skipped: skippedCount, total: leads.length });
     res.json({ imported: importedCount, skipped: skippedCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
