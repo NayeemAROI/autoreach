@@ -8,6 +8,7 @@ import Campaigns from './pages/Campaigns'
 import CampaignBuilder from './pages/CampaignBuilder'
 import Settings from './pages/Settings'
 import Billing from './pages/Billing'
+import Inbox from './pages/Inbox'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import ForgotPassword from './pages/ForgotPassword'
@@ -71,6 +72,11 @@ function App() {
           <Route path="/billing" element={
             <ProtectedRoute>
               <DashboardLayout><Billing /></DashboardLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/inbox" element={
+            <ProtectedRoute>
+              <DashboardLayout><Inbox /></DashboardLayout>
             </ProtectedRoute>
           } />
         </Routes>

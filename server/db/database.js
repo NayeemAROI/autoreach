@@ -275,6 +275,37 @@ db.exec(`
   );
 `);
 
+// Create inbox tables
+db.exec(`
+  CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    lead_id TEXT,
+    participantName TEXT DEFAULT '',
+    participantUrl TEXT DEFAULT '',
+    lastMessage TEXT DEFAULT '',
+    lastMessageAt TEXT DEFAULT (datetime('now')),
+    unreadCount INTEGER DEFAULT 0,
+    createdAt TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE SET NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    direction TEXT DEFAULT 'inbound',
+    content TEXT NOT NULL DEFAULT '',
+    senderName TEXT DEFAULT '',
+    linkedinMessageId TEXT DEFAULT '',
+    isRead INTEGER DEFAULT 0,
+    createdAt TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
+
 // Create Default UI User if no users exist
 const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
 let defaultUserId = '';

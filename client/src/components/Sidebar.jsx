@@ -19,7 +19,7 @@ const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { path: '/leads', icon: Users, label: 'Leads' },
   { path: '/campaigns', icon: Rocket, label: 'Campaigns' },
-  { path: '/inbox', icon: Mail, label: 'Inbox', badge: 'Soon' },
+  { path: '/inbox', icon: Mail, label: 'Inbox' },
   { path: '/analytics', icon: BarChart3, label: 'Analytics', badge: 'Soon' },
   { path: '/settings', icon: Settings, label: 'Settings' },
   { path: '/billing', icon: CreditCard, label: 'Billing' },
