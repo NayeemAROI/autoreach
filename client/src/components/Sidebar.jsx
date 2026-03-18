@@ -26,7 +26,7 @@ const navItems = [
 ]
 
 export default function Sidebar() {
-  const { logout, user } = useAuth();
+  const { logout, user, switchWorkspace } = useAuth();
   const [usage, setUsage] = useState(null)
   const [planName, setPlanName] = useState('')
 
@@ -52,6 +52,21 @@ export default function Sidebar() {
           </div>
         </div>
       </div>
+
+      {/* Workspace Selector */}
+      {user?.workspaces?.length > 0 && (
+        <div className="px-4 py-2 border-b border-border">
+          <select
+            value={user.activeWorkspaceId || ''}
+            onChange={e => switchWorkspace(e.target.value)}
+            className="w-full text-[11px] px-3 py-2 rounded-lg bg-bg-primary border border-border text-text-secondary cursor-pointer focus:outline-none focus:border-primary truncate"
+          >
+            {user.workspaces.map(ws => (
+              <option key={ws.id} value={ws.id}>{ws.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">

@@ -175,7 +175,70 @@ db.exec(`
     updatedAt TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    expiresAt TEXT NOT NULL,
+    createdAt TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS workspaces (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT UNIQUE NOT NULL,
+    owner_id TEXT NOT NULL,
+    plan TEXT DEFAULT 'free',
+    createdAt TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS workspace_members (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    role TEXT DEFAULT 'member',
+    joinedAt TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE(workspace_id, user_id)
+  );
 `);
+
+// Add activeWorkspaceId to users
+const usersColumns4 = db.prepare("PRAGMA table_info(users)").all();
+if (!usersColumns4.some((col) => col.name === "activeWorkspaceId")) {
+  console.log("Migration: Adding activeWorkspaceId to users");
+  try {
+    db.prepare("ALTER TABLE users ADD COLUMN activeWorkspaceId TEXT DEFAULT ''").run();
+  } catch(e) {
+    console.warn("Migration warning:", e.message);
+  }
+}
+
+// Migrate role values: 'admin' -> 'owner' for first user, keep rest
+const usersWithAdmin = db.prepare("SELECT id FROM users WHERE role = 'admin'").all();
+if (usersWithAdmin.length > 0) {
+  db.prepare("UPDATE users SET role = 'owner' WHERE role = 'admin'").run();
+  console.log(`Migration: Upgraded ${usersWithAdmin.length} admin(s) to owner role`);
+}
+
+// Auto-create default workspace for users who don't have one
+const usersWithoutWorkspace = db.prepare("SELECT id, name, email FROM users WHERE activeWorkspaceId = '' OR activeWorkspaceId IS NULL").all();
+for (const u of usersWithoutWorkspace) {
+  const wsId = uuidv4();
+  const slug = u.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '-') + '-workspace';
+  try {
+    db.prepare("INSERT OR IGNORE INTO workspaces (id, name, slug, owner_id) VALUES (?, ?, ?, ?)").run(wsId, `${u.name}'s Workspace`, slug, u.id);
+    db.prepare("INSERT OR IGNORE INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, 'owner')").run(uuidv4(), wsId, u.id);
+    db.prepare("UPDATE users SET activeWorkspaceId = ? WHERE id = ?").run(wsId, u.id);
+    console.log(`Migration: Created workspace for user ${u.email}`);
+  } catch(e) {
+    console.warn("Workspace migration warning:", e.message);
+  }
+}
 
 // Create Default UI User if no users exist
 const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();

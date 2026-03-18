@@ -88,6 +88,7 @@ app.use('/api/campaigns', require('./routes/campaigns'));
 app.use('/api/stats', require('./routes/stats'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/billing', require('./routes/billing'));
+app.use('/api/workspaces', require('./routes/workspaces'));
 
 // Initialize WebSocket Bridge
 extBridge.initialize(server);

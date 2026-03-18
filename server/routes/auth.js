@@ -3,13 +3,33 @@ const router = express.Router();
 const db = require('../db/database');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 const { sendVerificationEmail } = require('../services/email');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_automation_key';
-const JWT_EXPIRES_IN = '7d';
+const ACCESS_TOKEN_EXPIRES = '15m';
+const REFRESH_TOKEN_DAYS = 30;
 const { validateBody, schemas } = require('../middleware/validate');
+
+// Generate a secure refresh token and store it
+function generateRefreshToken(userId) {
+  const token = crypto.randomBytes(64).toString('hex');
+  const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  db.prepare('INSERT INTO refresh_tokens (id, user_id, token, expiresAt) VALUES (?, ?, ?, ?)').run(uuidv4(), userId, token, expiresAt);
+  // Clean up expired tokens for this user
+  db.prepare("DELETE FROM refresh_tokens WHERE user_id = ? AND expiresAt < datetime('now')").run(userId);
+  return { token, expiresAt };
+}
+
+function generateAccessToken(user) {
+  return jwt.sign(
+    { id: user.id, email: user.email, name: user.name, role: user.role || 'member', activeWorkspaceId: user.activeWorkspaceId || '' },
+    JWT_SECRET,
+    { expiresIn: ACCESS_TOKEN_EXPIRES }
+  );
+}
 
 // POST /api/auth/register
 router.post('/register', validateBody(schemas.register), async (req, res) => {
@@ -62,6 +82,13 @@ router.post('/register', validateBody(schemas.register), async (req, res) => {
     db.prepare('INSERT INTO email_verifications (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)')
       .run(uuidv4(), userId, verifyToken, expiresAt);
 
+    // Create default workspace for this user
+    const wsId = uuidv4();
+    const slug = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '-') + '-ws';
+    db.prepare('INSERT INTO workspaces (id, name, slug, owner_id) VALUES (?, ?, ?, ?)').run(wsId, `${name}'s Workspace`, slug, userId);
+    db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run(uuidv4(), wsId, userId, 'owner');
+    db.prepare('UPDATE users SET activeWorkspaceId = ? WHERE id = ?').run(wsId, userId);
+
     // Send email asynchronously (mocked for now since it's a code)
     console.log(`✉️ Verification code for ${email}: ${verifyToken}`);
 
@@ -106,18 +133,49 @@ router.post('/login', validateBody(schemas.login), async (req, res) => {
       });
     }
 
-    // Generate token
-    const token = jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role || 'user' }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    // Generate tokens
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user.id);
 
     res.json({
       message: 'Login successful',
-      token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role || 'user', has_completed_onboarding: user.has_completed_onboarding }
+      token: accessToken,
+      refreshToken: refreshToken.token,
+      refreshTokenExpiresAt: refreshToken.expiresAt,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role || 'member', activeWorkspaceId: user.activeWorkspaceId || '', has_completed_onboarding: user.has_completed_onboarding }
     });
 
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ error: 'Internal server error during login' });
+  }
+});
+
+// POST /api/auth/refresh (Get new access token using refresh token)
+router.post('/refresh', (req, res) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) return res.status(400).json({ error: 'Refresh token required' });
+
+  try {
+    const stored = db.prepare("SELECT * FROM refresh_tokens WHERE token = ? AND expiresAt > datetime('now')").get(refreshToken);
+    if (!stored) return res.status(401).json({ error: 'Invalid or expired refresh token' });
+
+    const user = db.prepare('SELECT id, name, email, role, activeWorkspaceId FROM users WHERE id = ?').get(stored.user_id);
+    if (!user) return res.status(401).json({ error: 'User not found' });
+
+    // Rotate: delete old, issue new
+    db.prepare('DELETE FROM refresh_tokens WHERE id = ?').run(stored.id);
+    const newRefresh = generateRefreshToken(user.id);
+    const accessToken = generateAccessToken(user);
+
+    res.json({
+      token: accessToken,
+      refreshToken: newRefresh.token,
+      refreshTokenExpiresAt: newRefresh.expiresAt
+    });
+  } catch (err) {
+    console.error('Token refresh error:', err);
+    res.status(500).json({ error: 'Token refresh failed' });
   }
 });
 
@@ -133,13 +191,19 @@ router.get('/me', (req, res) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     
-    // Fetch fresh user data just in case
-    const user = db.prepare('SELECT id, name, email, role, createdAt, has_completed_onboarding FROM users WHERE id = ?').get(decoded.id);
-    if (!user) {
-       return res.status(404).json({ error: 'User not found' });
-    }
+    // Fetch fresh user data
+    const user = db.prepare('SELECT id, name, email, role, activeWorkspaceId, createdAt, has_completed_onboarding FROM users WHERE id = ?').get(decoded.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
 
-    res.json({ user });
+    // Get user's workspaces
+    const workspaces = db.prepare(`
+      SELECT w.id, w.name, w.slug, wm.role as memberRole
+      FROM workspaces w
+      JOIN workspace_members wm ON wm.workspace_id = w.id
+      WHERE wm.user_id = ?
+    `).all(decoded.id);
+
+    res.json({ user: { ...user, workspaces } });
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }

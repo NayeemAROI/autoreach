@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useRef, useCallback } from 'react';
 
 const AuthContext = createContext();
 
@@ -8,9 +8,47 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [loading, setLoading] = useState(true);
+  const refreshTimerRef = useRef(null);
+
+  // Refresh access token using stored refresh token
+  const refreshAccessToken = useCallback(async () => {
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (!refreshToken) return false;
+
+    try {
+      const res = await fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setToken(data.token);
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('refreshToken', data.refreshToken);
+        scheduleTokenRefresh(data.token);
+        return true;
+      }
+    } catch (err) {
+      console.error('Token refresh failed:', err);
+    }
+    return false;
+  }, []);
+
+  // Schedule refresh 1 minute before token expires
+  const scheduleTokenRefresh = useCallback((accessToken) => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    try {
+      const payload = JSON.parse(atob(accessToken.split('.')[1]));
+      const expiresIn = (payload.exp * 1000) - Date.now() - 60000; // 1 min before expiry
+      if (expiresIn > 0) {
+        refreshTimerRef.current = setTimeout(() => refreshAccessToken(), expiresIn);
+      }
+    } catch (e) { /* ignore parse errors */ }
+  }, [refreshAccessToken]);
 
   useEffect(() => {
-    // If we have a token but no user, verify token on first load
     const loadUser = async () => {
       if (token) {
         try {
@@ -20,11 +58,24 @@ export const AuthProvider = ({ children }) => {
           if (res.ok) {
             const data = await res.json();
             setUser(data.user);
+            scheduleTokenRefresh(token);
           } else {
-            // Token invalid or expired
-            setToken(null);
-            setUser(null);
-            localStorage.removeItem('token');
+            // Try refresh
+            const refreshed = await refreshAccessToken();
+            if (refreshed) {
+              const retryRes = await fetch('/api/auth/me', {
+                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+              });
+              if (retryRes.ok) {
+                const data = await retryRes.json();
+                setUser(data.user);
+              }
+            } else {
+              setToken(null);
+              setUser(null);
+              localStorage.removeItem('token');
+              localStorage.removeItem('refreshToken');
+            }
           }
         } catch (error) {
           console.error('Failed to load user', error);
@@ -34,7 +85,8 @@ export const AuthProvider = ({ children }) => {
     };
 
     loadUser();
-  }, [token]);
+    return () => { if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current); };
+  }, []);
 
   const login = async (email, password) => {
     const res = await fetch('/api/auth/login', {
@@ -43,7 +95,6 @@ export const AuthProvider = ({ children }) => {
       body: JSON.stringify({ email, password })
     });
     
-    // Read body once as text, then parse
     const text = await res.text();
     let data;
     try {
@@ -59,6 +110,8 @@ export const AuthProvider = ({ children }) => {
     setToken(data.token);
     setUser(data.user);
     localStorage.setItem('token', data.token);
+    if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken);
+    scheduleTokenRefresh(data.token);
     return data;
   };
 
@@ -81,14 +134,15 @@ export const AuthProvider = ({ children }) => {
       throw new Error(data.error || 'Registration failed');
     }
 
-    // Don't auto-login after registration since email verification is required
     return data;
   };
 
   const logout = () => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     setToken(null);
     setUser(null);
     localStorage.removeItem('token');
+    localStorage.removeItem('refreshToken');
   };
 
   const completeOnboarding = () => {
@@ -97,8 +151,20 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const switchWorkspace = async (workspaceId) => {
+    const res = await fetch(`/api/workspaces/${workspaceId}/switch`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) {
+      setUser(prev => ({ ...prev, activeWorkspaceId: workspaceId }));
+      // Refresh token to include new workspace
+      await refreshAccessToken();
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, completeOnboarding }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, completeOnboarding, switchWorkspace, refreshAccessToken }}>
       {children}
     </AuthContext.Provider>
   );
