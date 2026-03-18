@@ -12,7 +12,8 @@ import {
   Zap,
   ChevronRight,
   LogOut,
-  CreditCard
+  CreditCard,
+  Plug
 } from 'lucide-react'
 
 const navItems = [
@@ -20,6 +21,7 @@ const navItems = [
   { path: '/leads', icon: Users, label: 'Leads' },
   { path: '/campaigns', icon: Rocket, label: 'Campaigns' },
   { path: '/inbox', icon: Mail, label: 'Inbox' },
+  { path: '/integrations', icon: Plug, label: 'Integrations' },
   { path: '/analytics', icon: BarChart3, label: 'Analytics', badge: 'Soon' },
   { path: '/settings', icon: Settings, label: 'Settings' },
   { path: '/billing', icon: CreditCard, label: 'Billing' },

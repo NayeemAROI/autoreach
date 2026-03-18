@@ -10,6 +10,15 @@ const session = {
   JSESSIONID: null
 };
 
+// Initialize on Service Worker wake
+chrome.storage.local.get(['outreach_token'], (res) => {
+  if (res.outreach_token) {
+    authToken = res.outreach_token;
+    console.log('[Automation Bridge] Token loaded on wake, trying to connect...');
+    connect();
+  }
+});
+
 // Listen for token updates from Popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.type === 'GET_STATUS') {
@@ -193,7 +202,7 @@ async function handleInboxSync() {
     };
 
     // Fetch recent conversations
-    const convRes = await fetch('https://www.linkedin.com/voyager/api/messaging/conversations?keyVersion=LEGACY_INBOX', {
+    const convRes = await fetch('https://www.linkedin.com/voyager/api/messaging/conversations?keyVersion=LEGACY_INBOX&q=search', {
       headers, credentials: 'include'
     });
 
