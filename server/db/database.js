@@ -130,6 +130,53 @@ if (!usersColumns.some((col) => col.name === "has_completed_onboarding")) {
   }
 }
 
+// Add role column to users (admin / user)
+const usersColumns2 = db.prepare("PRAGMA table_info(users)").all();
+if (!usersColumns2.some((col) => col.name === "role")) {
+  console.log("Migration: Adding role column to users table");
+  try {
+    db.prepare("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'").run();
+    // Make the first user an admin
+    const firstUser = db.prepare('SELECT id FROM users ORDER BY createdAt ASC LIMIT 1').get();
+    if (firstUser) {
+      db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(firstUser.id);
+      console.log('Migration: First user promoted to admin');
+    }
+  } catch(e) {
+    console.warn("Migration warning:", e.message);
+  }
+}
+
+// Add plan + Stripe columns to users
+const usersColumns3 = db.prepare("PRAGMA table_info(users)").all();
+if (!usersColumns3.some((col) => col.name === "plan")) {
+  console.log("Migration: Adding plan and stripeCustomerId to users");
+  try {
+    db.prepare("ALTER TABLE users ADD COLUMN plan TEXT DEFAULT 'free'").run();
+    db.prepare("ALTER TABLE users ADD COLUMN stripeCustomerId TEXT DEFAULT ''").run();
+  } catch(e) {
+    console.warn("Migration warning:", e.message);
+  }
+}
+
+// Create subscriptions table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS subscriptions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    stripeSubscriptionId TEXT DEFAULT '',
+    stripePriceId TEXT DEFAULT '',
+    plan TEXT DEFAULT 'free',
+    status TEXT DEFAULT 'active',
+    currentPeriodStart TEXT DEFAULT '',
+    currentPeriodEnd TEXT DEFAULT '',
+    cancelAtPeriodEnd INTEGER DEFAULT 0,
+    createdAt TEXT DEFAULT (datetime('now')),
+    updatedAt TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
+
 // Create Default UI User if no users exist
 const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
 let defaultUserId = '';

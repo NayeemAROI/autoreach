@@ -11,9 +11,14 @@ class CampaignEngine {
   start() {
     if (this.isRunning) return;
     this.isRunning = true;
-    console.log('⚙️ Campaign Execution Engine disabled temporarily to avoid spam...');
+    console.log('⚙️ Campaign Execution Engine started (interval: 60s)');
+    
+    // Run immediately once, then on interval
+    this.processCampaigns().catch(err => console.error('⚙️ Initial tick error:', err));
+    this.intervalId = setInterval(() => {
+      this.processCampaigns().catch(err => console.error('⚙️ Tick error:', err));
+    }, this.checkIntervalMs);
   }
-
 
   stop() {
     this.isRunning = false;

@@ -7,6 +7,7 @@ import Leads from './pages/Leads'
 import Campaigns from './pages/Campaigns'
 import CampaignBuilder from './pages/CampaignBuilder'
 import Settings from './pages/Settings'
+import Billing from './pages/Billing'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import ForgotPassword from './pages/ForgotPassword'
@@ -65,6 +66,11 @@ function App() {
           <Route path="/settings" element={
             <ProtectedRoute>
               <DashboardLayout><Settings /></DashboardLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/billing" element={
+            <ProtectedRoute>
+              <DashboardLayout><Billing /></DashboardLayout>
             </ProtectedRoute>
           } />
         </Routes>

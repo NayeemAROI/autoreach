@@ -198,4 +198,143 @@ router.delete('/:id', (req, res) => {
   }
 });
 
+// GET campaign pipeline — lead-by-lead step tracking
+router.get('/:id/pipeline', (req, res) => {
+  const campaignId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    const campaign = db.prepare('SELECT id FROM campaigns WHERE id = ? AND user_id = ?').get(campaignId, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    const pipeline = db.prepare(`
+      SELECT cl.lead_id, cl.current_step_index, cl.current_node_id, cl.next_execution_at,
+             cl.status, cl.error_message,
+             l.firstName, l.lastName, l.title, l.company, l.avatar, l.linkedinUrl
+      FROM campaign_leads cl
+      JOIN leads l ON cl.lead_id = l.id
+      WHERE cl.campaign_id = ? AND cl.user_id = ?
+      ORDER BY cl.status ASC, l.firstName ASC
+    `).all(campaignId, userId);
+
+    res.json({ pipeline });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST unenroll leads from campaign
+router.post('/:id/unenroll', (req, res) => {
+  const { leadIds } = req.body;
+  const campaignId = req.params.id;
+  const userId = req.user.id;
+
+  if (!Array.isArray(leadIds) || leadIds.length === 0) {
+    return res.status(400).json({ error: 'Please provide an array of leadIds' });
+  }
+
+  try {
+    const campaign = db.prepare('SELECT id, leadIds FROM campaigns WHERE id = ? AND user_id = ?').get(campaignId, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    db.transaction(() => {
+      // Remove from campaign_leads pipeline
+      const deleteStmt = db.prepare('DELETE FROM campaign_leads WHERE campaign_id = ? AND lead_id = ? AND user_id = ?');
+      for (const lid of leadIds) {
+        deleteStmt.run(campaignId, lid, userId);
+      }
+
+      // Update campaigns.leadIds array
+      const currentLeadIds = JSON.parse(campaign.leadIds || '[]');
+      const updatedLeadIds = currentLeadIds.filter(id => !leadIds.includes(id));
+      db.prepare('UPDATE campaigns SET leadIds = ? WHERE id = ?').run(JSON.stringify(updatedLeadIds), campaignId);
+    })();
+
+    res.json({ message: `Unenrolled ${leadIds.length} lead(s)` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST duplicate campaign
+router.post('/:id/duplicate', (req, res) => {
+  const campaignId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    const original = db.prepare('SELECT * FROM campaigns WHERE id = ? AND user_id = ?').get(campaignId, userId);
+    if (!original) return res.status(404).json({ error: 'Campaign not found' });
+
+    const newId = require('uuid').v4();
+    const newName = `${original.name} (Copy)`;
+
+    db.prepare(`
+      INSERT INTO campaigns (id, user_id, name, type, sequence, leadIds, schedule, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')
+    `).run(newId, userId, newName, original.type, original.sequence, '[]', original.schedule);
+
+    const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(newId);
+    campaign.sequence = JSON.parse(campaign.sequence || '[]');
+    campaign.stats = JSON.parse(campaign.stats || '{}');
+    campaign.leadIds = JSON.parse(campaign.leadIds || '[]');
+    campaign.schedule = JSON.parse(campaign.schedule || '{}');
+
+    res.status(201).json(campaign);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET campaign stats — real-time computed
+router.get('/:id/stats', (req, res) => {
+  const campaignId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    const campaign = db.prepare('SELECT id FROM campaigns WHERE id = ? AND user_id = ?').get(campaignId, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    // Pipeline status counts
+    const statusCounts = db.prepare(`
+      SELECT status, COUNT(*) as count
+      FROM campaign_leads
+      WHERE campaign_id = ? AND user_id = ?
+      GROUP BY status
+    `).all(campaignId, userId);
+
+    const counts = { active: 0, completed: 0, error: 0, paused: 0, total: 0 };
+    statusCounts.forEach(row => {
+      counts[row.status] = row.count;
+      counts.total += row.count;
+    });
+
+    // Activity counts for this campaign
+    const activityCounts = db.prepare(`
+      SELECT type, COUNT(*) as count
+      FROM activities
+      WHERE campaignId = ? AND user_id = ?
+      GROUP BY type
+    `).all(campaignId, userId);
+
+    const activities = {};
+    activityCounts.forEach(row => { activities[row.type] = row.count; });
+
+    // Node distribution — how many leads at each node
+    const nodeDistribution = db.prepare(`
+      SELECT current_node_id, COUNT(*) as count
+      FROM campaign_leads
+      WHERE campaign_id = ? AND user_id = ? AND status = 'active'
+      GROUP BY current_node_id
+    `).all(campaignId, userId);
+
+    const nodeLeadCounts = {};
+    nodeDistribution.forEach(row => { nodeLeadCounts[row.current_node_id || 'queued'] = row.count; });
+
+    res.json({ counts, activities, nodeLeadCounts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
+

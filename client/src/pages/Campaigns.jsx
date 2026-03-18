@@ -101,12 +101,28 @@ export default function Campaigns() {
     })
   }
 
+  const handleDuplicate = async (id) => {
+    try {
+      await apiFetch(`/api/campaigns/${id}/duplicate`, { method: 'POST' })
+      fetchCampaigns()
+      showToast('Campaign duplicated')
+    } catch (err) {
+      console.error(err)
+      showToast('Failed to duplicate', 'error')
+    }
+  }
+
   const getStepCount = (camp) => {
     if (camp.sequence && typeof camp.sequence === 'object' && camp.sequence.nodes) {
-      return Object.keys(camp.sequence.nodes).length - 1 // minus start node
+      return Object.keys(camp.sequence.nodes).length - 1
     }
     if (Array.isArray(camp.sequence)) return camp.sequence.length
     return 0
+  }
+
+  const getLeadCount = (camp) => {
+    const ids = camp.leadIds
+    return Array.isArray(ids) ? ids.length : 0
   }
 
   return (
@@ -144,6 +160,7 @@ export default function Campaigns() {
             const acceptRate = Math.round(((camp.stats?.accepted || 0) / total) * 100)
             const replyRate = Math.round(((camp.stats?.replied || 0) / total) * 100)
             const stepCount = getStepCount(camp)
+            const leadCount = getLeadCount(camp)
 
             return (
               <div key={camp.id} className={`glass-card p-5 animate-fade-in animate-fade-in-delay-${(index%4)+1} flex flex-col`}>
@@ -161,15 +178,23 @@ export default function Campaigns() {
                         <span className="text-[11px] text-text-muted capitalize">{camp.type}</span>
                         <div className="w-1 h-1 rounded-full bg-border-light"></div>
                         <span className="text-[11px] text-text-muted">{stepCount} steps</span>
+                        <div className="w-1 h-1 rounded-full bg-border-light"></div>
+                        <span className="text-[11px] text-text-muted"><Users className="w-3 h-3 inline -mt-0.5 mr-0.5" />{leadCount}</span>
                       </div>
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleDelete(camp.id)}
-                    className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-lg transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => handleDuplicate(camp.id)}
+                      className="p-1.5 text-text-muted hover:text-primary-light hover:bg-primary/10 rounded-lg transition-colors"
+                      title="Duplicate">
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
+                    </button>
+                    <button onClick={() => handleDelete(camp.id)}
+                      className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-lg transition-colors"
+                      title="Delete">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Status Badge */}

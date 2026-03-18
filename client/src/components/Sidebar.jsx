@@ -1,5 +1,7 @@
 import { NavLink } from 'react-router-dom'
+import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { apiFetch } from '../utils/api'
 import { 
   LayoutDashboard, 
   Users, 
@@ -9,7 +11,8 @@ import {
   Settings, 
   Zap,
   ChevronRight,
-  LogOut
+  LogOut,
+  CreditCard
 } from 'lucide-react'
 
 const navItems = [
@@ -19,10 +22,21 @@ const navItems = [
   { path: '/inbox', icon: Mail, label: 'Inbox', badge: 'Soon' },
   { path: '/analytics', icon: BarChart3, label: 'Analytics', badge: 'Soon' },
   { path: '/settings', icon: Settings, label: 'Settings' },
+  { path: '/billing', icon: CreditCard, label: 'Billing' },
 ]
 
 export default function Sidebar() {
   const { logout, user } = useAuth();
+  const [usage, setUsage] = useState(null)
+  const [planName, setPlanName] = useState('')
+
+  useEffect(() => {
+    apiFetch('/api/billing/subscription').then(r => r.json())
+      .then(data => {
+        setUsage(data.usage)
+        setPlanName(data.plan?.name || 'Free')
+      }).catch(() => {})
+  }, [])
   
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-[260px] bg-bg-secondary border-r border-border flex flex-col z-50">
@@ -87,6 +101,25 @@ export default function Sidebar() {
             <LogOut className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Usage Indicators */}
+        {usage && (
+          <div className="glass-card p-3 space-y-2">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] font-black uppercase tracking-widest text-text-muted">Usage</span>
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-primary/15 text-primary uppercase">{planName}</span>
+            </div>
+            {[
+              { label: 'Leads', used: usage.leads },
+              { label: 'Campaigns', used: usage.campaigns },
+            ].map((item, i) => (
+              <div key={i} className="flex items-center justify-between text-[11px]">
+                <span className="text-text-muted">{item.label}</span>
+                <span className="text-text-primary font-semibold">{item.used}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Health */}
         <div className="glass-card p-4">

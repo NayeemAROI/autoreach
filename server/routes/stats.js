@@ -6,24 +6,53 @@ const auth = require('../middleware/auth');
 // Apply auth middleware to all stats routes
 router.use(auth);
 
-// GET dashboard overview stats
+// Helper: check if user is admin
+const isAdmin = (req) => req.user.role === 'admin';
+
+// Helper: get effective userId (admin can override via ?userId=)
+const getEffectiveUserId = (req) => {
+  if (isAdmin(req) && req.query.userId) return req.query.userId;
+  return req.user.id;
+};
+
+// GET list of users (admin only, for the user filter dropdown)
+router.get('/users', (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'Admin access required' });
+  try {
+    const users = db.prepare('SELECT id, name, email, role FROM users ORDER BY name ASC').all();
+    res.json({ users });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET dashboard overview stats with period-over-period % change
 router.get('/overview', (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = getEffectiveUserId(req);
     const totalLeads = db.prepare('SELECT COUNT(*) as count FROM leads WHERE user_id = ?').get(userId).count;
     const activeCampaigns = db.prepare("SELECT COUNT(*) as count FROM campaigns WHERE user_id = ? AND status = 'active'").get(userId).count;
     const connectedLeads = db.prepare("SELECT COUNT(*) as count FROM leads WHERE user_id = ? AND status = 'connected'").get(userId).count;
     const repliedLeads = db.prepare("SELECT COUNT(*) as count FROM leads WHERE user_id = ? AND status = 'replied'").get(userId).count;
     
-    // Calculate rates
     const connectionRate = totalLeads > 0 ? Math.round((connectedLeads / totalLeads) * 100) : 0;
     const replyRate = totalLeads > 0 ? Math.round((repliedLeads / totalLeads) * 100) : 0;
 
-    // Today's actions
     const todayActions = db.prepare("SELECT COUNT(*) as count FROM activities WHERE user_id = ? AND date(timestamp) = date('now')").get(userId).count;
-
-    // Pending leads
     const pendingLeads = db.prepare("SELECT COUNT(*) as count FROM leads WHERE user_id = ? AND status = 'pending'").get(userId).count;
+
+    // Period-over-period comparison (last 30d vs previous 30d)
+    const cur30 = db.prepare("SELECT COUNT(*) as count FROM leads WHERE user_id = ? AND createdAt >= date('now','-30 days')").get(userId).count;
+    const prev30 = db.prepare("SELECT COUNT(*) as count FROM leads WHERE user_id = ? AND createdAt >= date('now','-60 days') AND createdAt < date('now','-30 days')").get(userId).count;
+    const leadsChange = prev30 > 0 ? Math.round(((cur30 - prev30) / prev30) * 100) : (cur30 > 0 ? 100 : 0);
+
+    const curConn = db.prepare("SELECT COUNT(*) as count FROM activities WHERE user_id = ? AND type='connection_sent' AND timestamp >= date('now','-30 days')").get(userId).count;
+    const prevConn = db.prepare("SELECT COUNT(*) as count FROM activities WHERE user_id = ? AND type='connection_sent' AND timestamp >= date('now','-60 days') AND timestamp < date('now','-30 days')").get(userId).count;
+    const connChange = prevConn > 0 ? Math.round(((curConn - prevConn) / prevConn) * 100) : (curConn > 0 ? 100 : 0);
+
+    const curReply = db.prepare("SELECT COUNT(*) as count FROM activities WHERE user_id = ? AND type='message_replied' AND timestamp >= date('now','-30 days')").get(userId).count;
+    const prevReply = db.prepare("SELECT COUNT(*) as count FROM activities WHERE user_id = ? AND type='message_replied' AND timestamp >= date('now','-60 days') AND timestamp < date('now','-30 days')").get(userId).count;
+    const replyChange = prevReply > 0 ? Math.round(((curReply - prevReply) / prevReply) * 100) : (curReply > 0 ? 100 : 0);
 
     res.json({
       totalLeads,
@@ -34,6 +63,9 @@ router.get('/overview', (req, res) => {
       replyRate,
       todayActions,
       pendingLeads,
+      leadsChange,
+      connChange,
+      replyChange,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -51,20 +83,22 @@ router.get('/activity', (req, res) => {
       WHERE a.user_id = ?
       ORDER BY a.timestamp DESC
       LIMIT ?
-    `).all(req.user.id, limit);
+    `).all(getEffectiveUserId(req), limit);
     res.json({ activities });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET chart data with range support
+// GET chart data with range + optional campaign filter
 router.get('/chart', (req, res) => {
   try {
-    const { range = 'monthly', start, end } = req.query;
-    const userId = req.user.id;
+    const { range = 'monthly', start, end, campaignId } = req.query;
+    const userId = getEffectiveUserId(req);
     let days = 30;
-    let startOffset = 0;
+
+    const campaignFilter = campaignId ? ' AND campaignId = ?' : '';
+    const campaignParams = campaignId ? [campaignId] : [];
 
     if (range === 'daily') days = 1;
     else if (range === 'weekly') days = 7;
@@ -85,10 +119,10 @@ router.get('/chart', (req, res) => {
             COUNT(CASE WHEN type = 'email_sent' THEN 1 END) as emails,
             COUNT(CASE WHEN type = 'message_replied' THEN 1 END) as replies
           FROM activities 
-          WHERE user_id = ? 
+          WHERE user_id = ?${campaignFilter}
           AND date(timestamp) = date('now') 
           AND strftime('%H', timestamp) = ?
-        `).get(userId, i.toString().padStart(2, '0'));
+        `).get(userId, ...campaignParams, i.toString().padStart(2, '0'));
 
         data.push({
           date: hourStr,
@@ -120,8 +154,8 @@ router.get('/chart', (req, res) => {
             COUNT(CASE WHEN type = 'email_sent' THEN 1 END) as emails,
             COUNT(CASE WHEN type = 'message_replied' THEN 1 END) as replies
           FROM activities 
-          WHERE user_id = ? AND date(timestamp) = ?
-        `).get(userId, dateStr);
+          WHERE user_id = ?${campaignFilter} AND date(timestamp) = ?
+        `).get(userId, ...campaignParams, dateStr);
 
         data.push({
           date: dateStr,
@@ -143,8 +177,8 @@ router.get('/chart', (req, res) => {
             COUNT(CASE WHEN type = 'email_sent' THEN 1 END) as emails,
             COUNT(CASE WHEN type = 'message_replied' THEN 1 END) as replies
           FROM activities 
-          WHERE user_id = ? AND date(timestamp) = date('now', ?)
-        `).get(dayOffset, userId, dayOffset);
+          WHERE user_id = ?${campaignFilter} AND date(timestamp) = date('now', ?)
+        `).get(dayOffset, userId, ...campaignParams, dayOffset);
         
         data.push({
           date: row.date,
@@ -176,8 +210,41 @@ router.get('/lead-status', (req, res) => {
   try {
     const statuses = db.prepare(`
       SELECT status, COUNT(*) as count FROM leads WHERE user_id = ? GROUP BY status
-    `).all(req.user.id);
+    `).all(getEffectiveUserId(req));
     res.json({ statuses });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+// GET per-campaign stats breakdown
+router.get('/campaign-breakdown', (req, res) => {
+  try {
+    const userId = getEffectiveUserId(req);
+    const campaigns = db.prepare('SELECT id, name, status, leadIds, stats FROM campaigns WHERE user_id = ? ORDER BY createdAt DESC').all(userId);
+
+    const breakdown = campaigns.map(c => {
+      const leadIds = JSON.parse(c.leadIds || '[]');
+      const stats = JSON.parse(c.stats || '{}');
+      const sent = stats.sent || 0;
+      const accepted = stats.accepted || 0;
+      const replied = stats.replied || 0;
+      const acceptRate = sent > 0 ? Math.round((accepted / sent) * 100) : 0;
+      const replyRate = sent > 0 ? Math.round((replied / sent) * 100) : 0;
+
+      return {
+        id: c.id,
+        name: c.name,
+        status: c.status,
+        totalLeads: leadIds.length,
+        sent,
+        accepted,
+        replied,
+        acceptRate,
+        replyRate
+      };
+    });
+
+    res.json({ breakdown });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -9,9 +9,10 @@ const { sendVerificationEmail } = require('../services/email');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_automation_key';
 const JWT_EXPIRES_IN = '7d';
+const { validateBody, schemas } = require('../middleware/validate');
 
 // POST /api/auth/register
-router.post('/register', async (req, res) => {
+router.post('/register', validateBody(schemas.register), async (req, res) => {
   try {
     const { name, email, password } = req.body;
 
@@ -77,7 +78,7 @@ router.post('/register', async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', validateBody(schemas.login), async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -106,12 +107,12 @@ router.post('/login', async (req, res) => {
     }
 
     // Generate token
-    const token = jwt.sign({ id: user.id, email: user.email, name: user.name }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    const token = jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role || 'user' }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
     res.json({
       message: 'Login successful',
       token,
-      user: { id: user.id, name: user.name, email: user.email, has_completed_onboarding: user.has_completed_onboarding }
+      user: { id: user.id, name: user.name, email: user.email, role: user.role || 'user', has_completed_onboarding: user.has_completed_onboarding }
     });
 
   } catch (error) {
@@ -133,7 +134,7 @@ router.get('/me', (req, res) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     
     // Fetch fresh user data just in case
-    const user = db.prepare('SELECT id, name, email, createdAt, has_completed_onboarding FROM users WHERE id = ?').get(decoded.id);
+    const user = db.prepare('SELECT id, name, email, role, createdAt, has_completed_onboarding FROM users WHERE id = ?').get(decoded.id);
     if (!user) {
        return res.status(404).json({ error: 'User not found' });
     }

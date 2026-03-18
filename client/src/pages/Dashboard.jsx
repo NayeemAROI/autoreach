@@ -6,9 +6,11 @@ import {
   Check, Calendar, X
 } from 'lucide-react'
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell
 } from 'recharts'
 import { apiFetch } from '../utils/api'
+import { useAuth } from '../context/AuthContext'
 import CustomCalendar from '../components/CustomCalendar'
 
 const activityIcons = {
@@ -77,12 +79,33 @@ export default function Dashboard() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const [customRange, setCustomRange] = useState({ start: '', end: '' })
   const [showCustomPicker, setShowCustomPicker] = useState(false)
+  const [campaignFilter, setCampaignFilter] = useState('')
+  const [breakdown, setBreakdown] = useState([])
+  const [leadStatuses, setLeadStatuses] = useState([])
+  const [userFilter, setUserFilter] = useState('')
+  const [userList, setUserList] = useState([])
+  const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false)
   const dropdownRef = useRef(null)
+  const userDropdownRef = useRef(null)
+  const { user: currentUser } = useAuth()
+  const isAdmin = currentUser?.role === 'admin'
+
+  // Fetch user list for admin filter
+  useEffect(() => {
+    if (isAdmin) {
+      apiFetch('/api/stats/users').then(r => r.json())
+        .then(data => setUserList(data.users || []))
+        .catch(() => {})
+    }
+  }, [isAdmin])
 
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
         setIsDropdownOpen(false)
+      }
+      if (userDropdownRef.current && !userDropdownRef.current.contains(event.target)) {
+        setIsUserDropdownOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -105,23 +128,31 @@ export default function Dashboard() {
       qs.append('start', customRange.start)
       qs.append('end', customRange.end)
     }
+    if (campaignFilter) qs.append('campaignId', campaignFilter)
+    if (userFilter) qs.append('userId', userFilter)
+
+    const userQs = userFilter ? `?userId=${userFilter}` : ''
 
     Promise.all([
-      apiFetch('/api/stats/overview').then(r => r.json()),
-      apiFetch('/api/stats/activity').then(r => r.json()),
+      apiFetch(`/api/stats/overview${userQs}`).then(r => r.json()),
+      apiFetch(`/api/stats/activity${userQs}`).then(r => r.json()),
       apiFetch(`/api/stats/chart?${qs.toString()}`).then(r => r.json()),
       apiFetch('/api/campaigns').then(r => r.json()),
-    ]).then(([statsData, actData, chartRes, campRes]) => {
+      apiFetch(`/api/stats/campaign-breakdown${userQs}`).then(r => r.json()),
+      apiFetch(`/api/stats/lead-status${userQs}`).then(r => r.json()),
+    ]).then(([statsData, actData, chartRes, campRes, breakdownRes, leadStatusRes]) => {
       setStats(statsData)
       setActivities(actData.activities || [])
       setChartData(chartRes.data || [])
-      setCampaigns(campRes.campaigns?.filter(c => c.status === 'active') || [])
+      setCampaigns(campRes.campaigns || [])
+      setBreakdown(breakdownRes.breakdown || [])
+      setLeadStatuses(leadStatusRes.statuses || [])
     }).catch(err => console.error("Error loading dashboard data:", err))
   }
 
   useEffect(() => {
     fetchDashboardData()
-  }, [timeRange, customRange])
+  }, [timeRange, customRange, campaignFilter, userFilter])
 
   if (!stats) {
     return (
@@ -143,19 +174,62 @@ export default function Dashboard() {
           <h1 className="text-2xl font-bold text-text-primary">Dashboard</h1>
           <p className="text-sm text-text-muted mt-1">Overview of your outreach performance</p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-text-muted">
+        <div className="flex items-center gap-3 text-xs text-text-muted">
+          {/* Admin user filter */}
+          {isAdmin && userList.length > 0 && (
+            <div className="relative" ref={userDropdownRef}>
+              <button
+                onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-semibold transition-all border cursor-pointer hover:border-primary/50"
+                style={{ background: 'var(--color-bg-elevated)', borderColor: userFilter ? 'var(--color-primary)' : 'var(--color-border)', color: userFilter ? 'var(--color-primary-light)' : 'var(--color-text-secondary)' }}
+              >
+                <Users className="w-3.5 h-3.5" />
+                {userFilter ? userList.find(u => u.id === userFilter)?.name || 'User' : 'All Users'}
+                <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isUserDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {isUserDropdownOpen && (
+                <div className="absolute top-full right-0 mt-2 w-56 p-1 bg-bg-elevated border border-border shadow-2xl rounded-xl z-[70] animate-in fade-in slide-in-from-top-1 duration-200 max-h-64 overflow-y-auto">
+                  <button
+                    onClick={() => { setUserFilter(''); setIsUserDropdownOpen(false) }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[11px] transition-colors ${
+                      !userFilter ? 'bg-primary/10 text-primary font-medium' : 'text-text-secondary hover:bg-bg-surface hover:text-text-primary'
+                    }`}
+                  >
+                    All Users (My Data)
+                    {!userFilter && <Check className="w-3.5 h-3.5" />}
+                  </button>
+                  {userList.map(u => (
+                    <button
+                      key={u.id}
+                      onClick={() => { setUserFilter(u.id); setIsUserDropdownOpen(false) }}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-[11px] transition-colors ${
+                        userFilter === u.id ? 'bg-primary/10 text-primary font-medium' : 'text-text-secondary hover:bg-bg-surface hover:text-text-primary'
+                      }`}
+                    >
+                      <span className="truncate">{u.name}</span>
+                      <span className="flex items-center gap-1.5">
+                        {u.role === 'admin' && <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/15 text-primary font-bold uppercase">Admin</span>}
+                        {userFilter === u.id && <Check className="w-3.5 h-3.5" />}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <div className="w-2 h-2 rounded-full bg-success pulse-dot"></div>
           Automation Active
         </div>
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-5">
         <StatCard
           title="Total Leads"
           value={stats.totalLeads}
-          change={12}
-          changeType="up"
+          change={Math.abs(stats.leadsChange)}
+          changeType={stats.leadsChange >= 0 ? 'up' : 'down'}
           icon={Users}
           delay={1}
         />
@@ -168,18 +242,24 @@ export default function Dashboard() {
         <StatCard
           title="Connection Rate"
           value={`${stats.connectionRate}%`}
-          change={5}
-          changeType="up"
+          change={Math.abs(stats.connChange)}
+          changeType={stats.connChange >= 0 ? 'up' : 'down'}
           icon={TrendingUp}
           delay={3}
         />
         <StatCard
           title="Reply Rate"
           value={`${stats.replyRate}%`}
-          change={3}
-          changeType="up"
+          change={Math.abs(stats.replyChange)}
+          changeType={stats.replyChange >= 0 ? 'up' : 'down'}
           icon={MessageSquare}
           delay={4}
+        />
+        <StatCard
+          title="Today's Actions"
+          value={stats.todayActions}
+          icon={Activity}
+          delay={5}
         />
       </div>
 
@@ -222,7 +302,19 @@ export default function Dashboard() {
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-4 text-xs">
+            <div className="flex items-center gap-3">
+              {/* Campaign filter */}
+              <select
+                value={campaignFilter}
+                onChange={e => setCampaignFilter(e.target.value)}
+                className="text-[11px] px-3 py-1.5 rounded-lg bg-bg-secondary border border-border text-text-secondary cursor-pointer focus:outline-none focus:border-primary"
+              >
+                <option value="">All Campaigns</option>
+                {campaigns.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              <div className="flex items-center gap-4 text-xs">
               <div className="flex items-center gap-1.5">
                 <div className="w-2 h-2 rounded-full bg-primary"></div>
                 <span className="text-text-muted">Connections</span>
@@ -234,6 +326,7 @@ export default function Dashboard() {
               <div className="flex items-center gap-1.5">
                 <div className="w-2 h-2 rounded-full bg-success"></div>
                 <span className="text-text-muted">Replies</span>
+              </div>
               </div>
             </div>
           </div>
@@ -358,43 +451,80 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Active Campaigns */}
-      <div className="glass-card p-6 animate-fade-in">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-sm font-semibold text-text-primary">Active Campaigns</h2>
-          <span className="text-xs text-text-muted">{campaigns.length} running</span>
+      {/* Bottom Row: Campaign Breakdown + Lead Status */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        {/* Campaign Breakdown Table */}
+        <div className="xl:col-span-2 glass-card p-6 animate-fade-in">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-sm font-semibold text-text-primary">Campaign Performance</h2>
+            <span className="text-xs text-text-muted">{breakdown.length} campaigns</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2.5 text-[10px] font-black uppercase tracking-widest text-text-muted">Campaign</th>
+                  <th className="text-center py-2.5 text-[10px] font-black uppercase tracking-widest text-text-muted">Status</th>
+                  <th className="text-center py-2.5 text-[10px] font-black uppercase tracking-widest text-text-muted">Leads</th>
+                  <th className="text-center py-2.5 text-[10px] font-black uppercase tracking-widest text-text-muted">Sent</th>
+                  <th className="text-center py-2.5 text-[10px] font-black uppercase tracking-widest text-text-muted">Accept %</th>
+                  <th className="text-center py-2.5 text-[10px] font-black uppercase tracking-widest text-text-muted">Reply %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {breakdown.map(c => {
+                  const statusColor = c.status === 'active' ? 'text-success' : c.status === 'paused' ? 'text-warning' : 'text-text-muted'
+                  return (
+                    <tr key={c.id} className="border-b border-border/50 hover:bg-bg-hover transition-colors">
+                      <td className="py-3 font-semibold text-text-primary max-w-[200px] truncate">{c.name}</td>
+                      <td className="py-3 text-center"><span className={`font-bold uppercase text-[10px] ${statusColor}`}>{c.status}</span></td>
+                      <td className="py-3 text-center text-text-secondary">{c.totalLeads}</td>
+                      <td className="py-3 text-center text-text-secondary">{c.sent}</td>
+                      <td className="py-3 text-center"><span className="font-bold text-success">{c.acceptRate}%</span></td>
+                      <td className="py-3 text-center"><span className="font-bold text-primary-light">{c.replyRate}%</span></td>
+                    </tr>
+                  )
+                })}
+                {breakdown.length === 0 && (
+                  <tr><td colSpan={6} className="py-8 text-center text-text-muted">No campaigns yet</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {campaigns.map((camp) => {
-            const total = camp.stats?.sent || 1
-            const acceptRate = Math.round(((camp.stats?.accepted || 0) / total) * 100)
-            const replyRate = Math.round(((camp.stats?.replied || 0) / total) * 100)
-            return (
-              <div key={camp.id} className="p-4 rounded-xl bg-bg-secondary border border-border hover:border-border-light transition-all">
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-text-primary truncate pr-2">{camp.name}</h3>
-                  <span className="badge badge-success">Active</span>
-                </div>
-                <div className="flex items-center gap-6 text-xs mb-3">
-                  <div>
-                    <span className="text-text-muted">Sent: </span>
-                    <span className="text-text-primary font-semibold">{camp.stats?.sent || 0}</span>
-                  </div>
-                  <div>
-                    <span className="text-text-muted">Accepted: </span>
-                    <span className="text-success font-semibold">{acceptRate}%</span>
-                  </div>
-                  <div>
-                    <span className="text-text-muted">Replied: </span>
-                    <span className="text-primary-light font-semibold">{replyRate}%</span>
-                  </div>
-                </div>
-                <div className="progress-bar">
-                  <div className="progress-fill" style={{ width: `${acceptRate}%` }}></div>
-                </div>
+
+        {/* Lead Status Donut Chart */}
+        <div className="glass-card p-6 animate-fade-in">
+          <h2 className="text-sm font-semibold text-text-primary mb-5">Lead Distribution</h2>
+          {leadStatuses.length > 0 ? (
+            <>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie data={leadStatuses} dataKey="count" nameKey="status" cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={3} strokeWidth={0}>
+                    {leadStatuses.map((entry, i) => {
+                      const colors = { new: '#6366f1', pending: '#f59e0b', connected: '#10b981', replied: '#06b6d4', error: '#ef4444' }
+                      return <Cell key={i} fill={colors[entry.status] || '#64748b'} />
+                    })}
+                  </Pie>
+                  <Tooltip contentStyle={{ background: '#1a1a2e', border: '1px solid #2a2a4a', borderRadius: '8px', fontSize: '11px' }} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="flex flex-wrap justify-center gap-3 mt-4">
+                {leadStatuses.map((s, i) => {
+                  const colors = { new: '#6366f1', pending: '#f59e0b', connected: '#10b981', replied: '#06b6d4', error: '#ef4444' }
+                  return (
+                    <div key={i} className="flex items-center gap-1.5 text-xs">
+                      <div className="w-2 h-2 rounded-full" style={{ background: colors[s.status] || '#64748b' }}></div>
+                      <span className="text-text-muted capitalize">{s.status}</span>
+                      <span className="text-text-primary font-semibold">{s.count}</span>
+                    </div>
+                  )
+                })}
               </div>
-            )
-          })}
+            </>
+          ) : (
+            <div className="flex items-center justify-center h-48 text-text-muted text-xs">No lead data</div>
+          )}
         </div>
       </div>
     </div>
