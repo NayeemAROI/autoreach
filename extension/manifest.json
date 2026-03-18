@@ -22,7 +22,10 @@
       "js": ["src/content/index.js"]
     },
     {
-      "matches": ["http://localhost/*", "http://127.0.0.1/*"],
+      "matches": [
+        "*://localhost/*",
+        "*://127.0.0.1/*"
+      ],
       "js": ["src/content/app-sync.js"]
     }
   ],

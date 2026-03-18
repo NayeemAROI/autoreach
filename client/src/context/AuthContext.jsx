@@ -48,11 +48,24 @@ export const AuthProvider = ({ children }) => {
     } catch (e) { /* ignore parse errors */ }
   }, [refreshAccessToken]);
 
-  // Broadcast token to extension
+  // Broadcast token to extension robustly
   useEffect(() => {
-    if (token) {
-      window.postMessage({ type: 'AUTOREACH_AUTH_TOKEN', token }, '*');
-    }
+    const syncToken = () => {
+      if (token) {
+        window.postMessage({ type: 'AUTOREACH_AUTH_TOKEN', token }, '*');
+      }
+    };
+
+    syncToken();
+
+    const handleMessage = (e) => {
+      if (e.source === window && e.data && e.data.type === 'AUTOREACH_EXTENSION_READY') {
+        syncToken();
+      }
+    };
+    
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
   }, [token]);
 
   useEffect(() => {

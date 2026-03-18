@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const bridge = require('../services/linkedinBridge');
-const { requireAuth } = require('../middleware/auth');
+const authenticate = require('../middleware/auth');
 
-router.get('/status', requireAuth, (req, res) => {
+router.get('/status', authenticate, (req, res) => {
   try {
     // For now we assume a single session for the entire application bridging
     // Later this will be scoped by req.user.id
