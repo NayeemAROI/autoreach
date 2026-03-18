@@ -32,10 +32,13 @@ export default function Leads() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [verificationStatusFilter, setVerificationStatusFilter] = useState('all')
+  const [campaignFilter, setCampaignFilter] = useState('all')
+  const [hasEmailFilter, setHasEmailFilter] = useState('all')
   const [selectedLeads, setSelectedLeads] = useState(new Set())
   const [selectedCampaignId, setSelectedCampaignId] = useState('')
   const [enrolling, setEnrolling] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
 
   // Custom Dropdown State
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
@@ -61,7 +64,7 @@ export default function Leads() {
 
   useEffect(() => {
     fetchLeads()
-  }, [search, statusFilter, verificationStatusFilter])
+  }, [search, statusFilter, verificationStatusFilter, campaignFilter, hasEmailFilter])
 
   useEffect(() => {
     fetchCampaigns()
@@ -131,10 +134,17 @@ export default function Leads() {
       if (search) qs.append('search', search)
       if (statusFilter !== 'all') qs.append('status', statusFilter)
       if (verificationStatusFilter !== 'all') qs.append('verification_status', verificationStatusFilter)
+      if (campaignFilter !== 'all') qs.append('campaign', campaignFilter)
       
       const res = await apiFetch(`/api/leads?${qs.toString()}`)
       const data = await res.json()
-      setLeads(data.leads || [])
+      let filtered = data.leads || []
+      
+      // Client-side email filter
+      if (hasEmailFilter === 'yes') filtered = filtered.filter(l => l.email && l.email.trim())
+      if (hasEmailFilter === 'no') filtered = filtered.filter(l => !l.email || !l.email.trim())
+      
+      setLeads(filtered)
     } catch (err) {
       console.error(err)
     } finally {
@@ -457,45 +467,40 @@ export default function Leads() {
       </div>
 
       {/* Toolbar */}
-      <div className="relative z-[60] glass-card p-4 lg:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 border border-white/[0.06] shadow-lg shadow-black/10">
-        <div className="flex-1 w-full relative group">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted group-focus-within:text-primary transition-colors z-10 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search by name, company, email..."
-            className="input w-full !pl-11 pr-4 py-2.5 bg-bg-primary/40 border border-border/80 hover:border-border-light focus:border-primary/50 focus:bg-bg-primary transition-all rounded-xl shadow-sm text-sm"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </div>
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          {/* Custom Dropdown */}
-          <div className="relative min-w-[180px]" ref={dropdownRef}>
+      <div className="relative z-20 glass-card p-4 lg:p-5 flex flex-col gap-4 border border-white/[0.06] shadow-lg shadow-black/10">
+        {/* Row 1: Search + Status Filter + Advanced Toggle */}
+        <div className="flex items-center gap-3">
+          <div className="flex-1 relative group">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted group-focus-within:text-primary transition-colors z-10 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search by name, company, email..."
+              className="input w-full !pl-11 pr-4 py-2.5 bg-bg-primary/40 border border-border/80 hover:border-border-light focus:border-primary/50 focus:bg-bg-primary transition-all rounded-xl shadow-sm text-sm"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+
+          {/* Funnel Stage Filter */}
+          <div className="relative min-w-[170px]" ref={dropdownRef}>
             <button
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              className={`w-full flex items-center justify-between pl-11 pr-4 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm border
+              className={`w-full flex items-center justify-between pl-10 pr-3 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm border
                 ${isDropdownOpen 
                   ? 'bg-bg-primary border-primary/50 ring-1 ring-primary/20 text-text-primary' 
-                  : 'bg-bg-primary/40 border-border/80 text-text-secondary hover:border-border-light hover:bg-bg-surface'
+                  : 'bg-bg-primary/40 border-border/80 text-text-secondary hover:border-border-light'
                 }`}
             >
-              <Filter className={`absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${isDropdownOpen ? 'text-primary' : 'text-text-muted group-hover:text-primary'}`} />
-              
+              <Filter className={`absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${isDropdownOpen ? 'text-primary' : 'text-text-muted'}`} />
               <span className="truncate">
-                {statusFilter === 'all' && 'Any Funnel Stage'}
-                {statusFilter === 'not_invited' && 'Not Invited'}
-                {statusFilter === 'invited' && 'Invited'}
-                {statusFilter === 'replied' && 'Replied'}
-                {statusFilter === 'liked' && 'Liked'}
-                {statusFilter === 'endorsed' && 'Endorsed'}
+                {statusFilter === 'all' ? 'Funnel Stage' : {
+                  not_invited: 'Not Invited', invited: 'Invited', replied: 'Replied', liked: 'Liked', endorsed: 'Endorsed'
+                }[statusFilter]}
               </span>
-              
-              <ChevronDown className={`w-4 h-4 text-text-muted transition-transform duration-200 ${isDropdownOpen ? 'rotate-180 text-primary' : ''}`} />
+              <ChevronDown className={`w-3.5 h-3.5 ml-1 text-text-muted transition-transform duration-200 ${isDropdownOpen ? 'rotate-180 text-primary' : ''}`} />
             </button>
-
-            {/* Dropdown Menu */}
             {isDropdownOpen && (
-              <div className="absolute top-full left-0 right-0 mt-2 p-1.5 bg-bg-elevated border border-border/80 rounded-xl shadow-xl shadow-black/40 z-[100] animate-in fade-in slide-in-from-top-2 duration-200">
+              <div className="absolute top-full left-0 right-0 mt-1 p-1.5 bg-bg-elevated border border-border/80 rounded-xl shadow-xl shadow-black/40 z-50">
                 {[
                   { value: 'all', label: 'Any Funnel Stage' },
                   { value: 'not_invited', label: 'Not Invited' },
@@ -506,15 +511,11 @@ export default function Leads() {
                 ].map((option) => (
                   <button
                     key={option.value}
-                    onClick={() => {
-                      setStatusFilter(option.value);
-                      setIsDropdownOpen(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-colors text-left
+                    onClick={() => { setStatusFilter(option.value); setIsDropdownOpen(false); }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors text-left
                       ${statusFilter === option.value 
                         ? 'bg-primary/10 text-primary font-medium' 
-                        : 'text-text-secondary hover:bg-bg-surface hover:text-text-primary'
-                      }`}
+                        : 'text-text-secondary hover:bg-bg-surface hover:text-text-primary'}`}
                   >
                     {option.label}
                     {statusFilter === option.value && <Check className="w-4 h-4 text-primary" />}
@@ -523,12 +524,80 @@ export default function Leads() {
               </div>
             )}
           </div>
+
+          {/* Advanced Filters Toggle */}
+          <button
+            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+            className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition-all border
+              ${showAdvancedFilters
+                ? 'bg-primary/10 border-primary/30 text-primary'
+                : 'bg-bg-primary/40 border-border/80 text-text-muted hover:border-border-light hover:text-text-secondary'}`}
+          >
+            <Filter className="w-4 h-4" />
+            Filters
+            {(verificationStatusFilter !== 'all' || campaignFilter !== 'all' || hasEmailFilter !== 'all') && (
+              <span className="w-5 h-5 rounded-full bg-primary text-white text-[10px] font-bold flex items-center justify-center">
+                {[verificationStatusFilter !== 'all', campaignFilter !== 'all', hasEmailFilter !== 'all'].filter(Boolean).length}
+              </span>
+            )}
+          </button>
         </div>
+
+        {/* Row 2: Advanced Filters (collapsible) */}
+        {showAdvancedFilters && (
+          <div className="flex items-center gap-3 flex-wrap pt-1 border-t border-border/40 animate-fade-in">
+            {/* Verification Status */}
+            <select
+              value={verificationStatusFilter}
+              onChange={(e) => setVerificationStatusFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl bg-bg-primary/40 border border-border/80 text-sm text-text-secondary focus:border-primary outline-none min-w-[150px]"
+            >
+              <option value="all">Any Verification</option>
+              <option value="unverified">Unverified</option>
+              <option value="verified">Verified</option>
+              <option value="failed">Failed</option>
+            </select>
+
+            {/* Campaign Filter */}
+            <select
+              value={campaignFilter}
+              onChange={(e) => setCampaignFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl bg-bg-primary/40 border border-border/80 text-sm text-text-secondary focus:border-primary outline-none min-w-[150px]"
+            >
+              <option value="all">Any Campaign</option>
+              {campaigns.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+
+            {/* Has Email */}
+            <select
+              value={hasEmailFilter}
+              onChange={(e) => setHasEmailFilter(e.target.value)}
+              className="px-3 py-2 rounded-xl bg-bg-primary/40 border border-border/80 text-sm text-text-secondary focus:border-primary outline-none min-w-[130px]"
+            >
+              <option value="all">Email Status</option>
+              <option value="yes">Has Email</option>
+              <option value="no">No Email</option>
+            </select>
+
+            {/* Clear Filters */}
+            {(verificationStatusFilter !== 'all' || campaignFilter !== 'all' || hasEmailFilter !== 'all') && (
+              <button
+                onClick={() => { setVerificationStatusFilter('all'); setCampaignFilter('all'); setHasEmailFilter('all'); }}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium text-danger hover:bg-danger/10 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+                Clear Filters
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Table */}
-      <div className="glass-card overflow-visible">
-        <div className="table-container border-0 rounded-none bg-transparent overflow-visible">
+      <div className="glass-card overflow-hidden relative z-10">
+        <div className="table-container border-0 rounded-none bg-transparent overflow-x-auto">
           <table className="w-full">
             <thead className="bg-bg-elevated/50">
               <tr>
