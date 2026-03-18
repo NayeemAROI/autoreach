@@ -193,11 +193,16 @@ export default function InboxPage() {
                 <div className="flex items-center justify-center h-full text-text-muted text-sm">No messages in this thread</div>
               ) : (
                 messages.map(msg => (
-                  <div key={msg.id} className={`flex ${msg.direction === 'outbound' ? 'justify-end' : 'justify-start'}`}>
+                  <div key={msg.id} className={`flex flex-col ${msg.direction === 'outbound' ? 'items-start' : 'items-end'}`}>
+                    <span className={`text-[10px] font-medium mb-1 px-1 ${
+                      msg.direction === 'outbound' ? 'text-primary/70' : 'text-accent/70'
+                    }`}>
+                      {msg.direction === 'outbound' ? 'You' : (msg.senderName || getDisplayName(activeConv))}
+                    </span>
                     <div className={`max-w-[70%] rounded-2xl px-4 py-2.5 ${
                       msg.direction === 'outbound' 
-                        ? 'bg-primary text-white rounded-br-md' 
-                        : 'bg-bg-secondary border border-border text-text-primary rounded-bl-md'
+                        ? 'bg-primary text-white rounded-bl-md' 
+                        : 'bg-bg-secondary border border-border text-text-primary rounded-br-md'
                     }`}>
                       <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                       <p className={`text-[10px] mt-1 ${msg.direction === 'outbound' ? 'text-white/60' : 'text-text-muted'}`}>

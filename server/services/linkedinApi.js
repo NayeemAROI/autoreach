@@ -173,11 +173,9 @@ async function syncInbox(userId) {
 
   let totalMessages = 0;
   let totalConversations = 0;
-  const MAX_MESSAGES = 50;
 
   // Step 2: For each conversation, fetch events (messages) via old API
   for (const conv of conversations) {
-    if (totalMessages >= MAX_MESSAGES) break;
 
     const convBackendUrn = conv.backendUrn || '';
     // Thread ID is the part after "urn:li:messagingThread:"
@@ -188,7 +186,7 @@ async function syncInbox(userId) {
     let events = [];
     let eventProfiles = {};
     try {
-      const eventsUrl = `${VOYAGER_BASE}/messaging/conversations/${encodeURIComponent(threadId)}/events?count=10`;
+      const eventsUrl = `${VOYAGER_BASE}/messaging/conversations/${encodeURIComponent(threadId)}/events?count=40`;
       const eventsRes = await fetch(eventsUrl, { headers });
       
       if (eventsRes.ok) {
@@ -247,18 +245,23 @@ async function syncInbox(userId) {
     if (!participantName) participantName = 'LinkedIn User';
 
     // Upsert conversation in DB (use threadId as unique identifier)
-    let dbConv = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND participantUrl = ?').get(userId, participantUrl || `linkedin:${threadId}`);
+    let dbConv = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND linkedinThreadId = ?').get(userId, threadId);
+    if (!dbConv && participantUrl) {
+      dbConv = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND participantUrl = ?').get(userId, participantUrl);
+    }
     if (!dbConv && participantName !== 'LinkedIn User') {
       dbConv = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND participantName = ?').get(userId, participantName);
     }
     if (!dbConv) {
       const cId = uuidv4();
       const pUrl = participantUrl || `linkedin:${threadId}`;
-      db.prepare("INSERT INTO conversations (id, user_id, participantName, participantUrl, lastMessage, lastMessageAt, unreadCount) VALUES (?, ?, ?, ?, '', datetime('now'), 0)")
-        .run(cId, userId, participantName, pUrl);
+      db.prepare("INSERT INTO conversations (id, user_id, participantName, participantUrl, linkedinThreadId, lastMessage, lastMessageAt, unreadCount) VALUES (?, ?, ?, ?, ?, '', datetime('now'), 0)")
+        .run(cId, userId, participantName, pUrl, threadId);
       dbConv = { id: cId };
       totalConversations++;
     } else {
+      // Always update threadId and name
+      db.prepare("UPDATE conversations SET linkedinThreadId = ? WHERE id = ? AND (linkedinThreadId = '' OR linkedinThreadId IS NULL)").run(threadId, dbConv.id);
       if (participantName !== 'LinkedIn User') {
         db.prepare('UPDATE conversations SET participantName = ? WHERE id = ?').run(participantName, dbConv.id);
       }
@@ -270,7 +273,7 @@ async function syncInbox(userId) {
     let unread = 0;
 
     for (const event of events) {
-      if (totalMessages >= MAX_MESSAGES) break;
+
 
       // Extract message body from event
       const eventContent = event.eventContent || {};
@@ -282,11 +285,18 @@ async function syncInbox(userId) {
       const timestamp = event.createdAt ? new Date(event.createdAt).toISOString() : new Date().toISOString();
 
       // Determine direction from sender
-      const fromUrn = event.from?.['com.linkedin.voyager.messaging.MessagingMember']?.entityUrn ||
-                      event.from?.entityUrn || event.from || '';
-      const fromId = typeof fromUrn === 'string' ? fromUrn.split(':').pop() : '';
-      const isFromMe = fromId.includes(cookie.memberId);
+      // LinkedIn uses *from (REST.li entity ref) with format:
+      //   urn:li:fs_messagingMember:(threadId,memberId)
+      const fromUrn = event['*from'] || '';
+      // Extract memberId - it's after the last comma in the URN
+      const commaIdx = fromUrn.lastIndexOf(',');
+      const fromMemberId = commaIdx >= 0 ? fromUrn.substring(commaIdx + 1).replace(')', '') : '';
+      const isFromMe = fromMemberId && cookie.memberId && fromMemberId === cookie.memberId;
       const direction = isFromMe ? 'outbound' : 'inbound';
+      
+      if (totalMessages < 3) {
+        console.log(`[LinkedIn API] Msg direction: fromMemberId=${fromMemberId}, me=${cookie.memberId}, dir=${direction}`);
+      }
 
       // Dedup
       const existing = db.prepare('SELECT id FROM messages WHERE linkedinMessageId = ? AND conversation_id = ?').get(linkedinMsgId, dbConv.id);
@@ -310,8 +320,74 @@ async function syncInbox(userId) {
       .run((lastMsg || '').substring(0, 200), displayTime, conv.unreadCount || unread, dbConv.id);
   }
 
-  console.log(`[LinkedIn API] Synced ${totalMessages} messages across ${totalConversations} new conversations (limit: ${MAX_MESSAGES})`);
+  console.log(`[LinkedIn API] Synced ${totalMessages} messages across ${totalConversations} new conversations`);
   return { conversations: totalConversations, messages: totalMessages };
 }
 
-module.exports = { validateCookie, saveCookie, getCookie, disconnectCookie, syncInbox };
+/**
+ * Send a message to a LinkedIn conversation.
+ * Uses the old Voyager messaging events API.
+ */
+async function sendMessage(userId, conversationId, content) {
+  const cookie = getCookie(userId);
+  if (!cookie || !cookie.valid) {
+    throw new Error('No valid LinkedIn cookie.');
+  }
+
+  // Get conversation to find the threadId
+  const conv = db.prepare('SELECT * FROM conversations WHERE id = ? AND user_id = ?').get(conversationId, userId);
+  if (!conv) throw new Error('Conversation not found');
+
+  // Get threadId from dedicated column or fallback to participantUrl
+  let threadId = conv.linkedinThreadId || '';
+  if (!threadId && conv.participantUrl?.startsWith('linkedin:')) {
+    threadId = conv.participantUrl.replace('linkedin:', '');
+  }
+
+  if (!threadId) {
+    throw new Error('Cannot send message: no LinkedIn thread ID found. Please sync your inbox first to link this conversation.');
+  }
+
+  const headers = getHeaders(cookie.li_at, cookie.csrf);
+  headers['Content-Type'] = 'application/json; charset=UTF-8';
+
+  const body = {
+    eventCreate: {
+      value: {
+        'com.linkedin.voyager.messaging.create.MessageCreate': {
+          body: content,
+          attachments: [],
+          attributedBody: {
+            text: content,
+            attributes: []
+          }
+        }
+      }
+    }
+  };
+
+  const url = `${VOYAGER_BASE}/messaging/conversations/${encodeURIComponent(threadId)}/events`;
+  console.log(`[LinkedIn API] Sending message to thread ${threadId.substring(0, 20)}...`);
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body)
+  });
+
+  if (res.status === 401 || res.status === 403) {
+    db.prepare('UPDATE users SET linkedin_cookie_valid = 0 WHERE id = ?').run(userId);
+    throw new Error('LinkedIn session expired. Please reconnect.');
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error(`[LinkedIn API] Send failed: ${res.status} - ${text.substring(0, 200)}`);
+    throw new Error(`Failed to send message (${res.status})`);
+  }
+
+  console.log(`[LinkedIn API] Message sent successfully`);
+  return { success: true };
+}
+
+module.exports = { validateCookie, saveCookie, getCookie, disconnectCookie, syncInbox, sendMessage };

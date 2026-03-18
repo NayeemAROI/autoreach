@@ -54,7 +54,7 @@ router.get('/:id', (req, res) => {
 });
 
 // POST /api/inbox/:id/reply - send reply in conversation
-router.post('/:id/reply', (req, res) => {
+router.post('/:id/reply', async (req, res) => {
   const { content } = req.body;
   if (!content?.trim()) return res.status(400).json({ error: 'Message content required' });
 
@@ -62,22 +62,35 @@ router.post('/:id/reply', (req, res) => {
     const conversation = db.prepare('SELECT * FROM conversations WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
     if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
 
+    // Save message to DB first
     const msgId = uuidv4();
     db.prepare(`
       INSERT INTO messages (id, conversation_id, user_id, direction, content, senderName)
       VALUES (?, ?, ?, 'outbound', ?, ?)
     `).run(msgId, req.params.id, req.user.id, content.trim(), req.user.name || 'You');
 
-    // Update conversation
     db.prepare("UPDATE conversations SET lastMessage = ?, lastMessageAt = datetime('now') WHERE id = ?")
       .run(content.trim().substring(0, 200), req.params.id);
 
-    // Dispatch message via extension WebSocket
-    const bridge = require('../services/linkedinBridge');
-    bridge.sendCommand(req.user.id, 'SEND_MESSAGE', {
-      profileUrl: conversation.participantUrl,
-      message: content.trim()
-    });
+    // Try server-side send via LinkedIn API
+    const cookie = linkedinApi.getCookie(req.user.id);
+    if (cookie && cookie.valid) {
+      try {
+        await linkedinApi.sendMessage(req.user.id, req.params.id, content.trim());
+      } catch (sendErr) {
+        console.warn(`[Inbox] LinkedIn send failed: ${sendErr.message}`);
+        // Message is saved locally even if LinkedIn send fails
+      }
+    } else {
+      // Fallback to extension bridge
+      try {
+        const bridge = require('../services/linkedinBridge');
+        bridge.sendCommand(req.user.id, 'SEND_MESSAGE', {
+          profileUrl: conversation.participantUrl,
+          message: content.trim()
+        });
+      } catch (e) { /* bridge not available */ }
+    }
 
     const message = db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId);
     res.status(201).json(message);
@@ -145,17 +158,29 @@ router.post('/sync', (req, res) => {
   }
 });
 
-// POST /api/inbox/trigger-sync - trigger extension to sync LinkedIn inbox
-router.post('/trigger-sync', (req, res) => {
+// POST /api/inbox/trigger-sync - trigger LinkedIn inbox sync
+router.post('/trigger-sync', async (req, res) => {
   try {
+    // Try server-side sync first (cookie-based)
+    const cookie = linkedinApi.getCookie(req.user.id);
+    if (cookie && cookie.valid) {
+      const result = await linkedinApi.syncInbox(req.user.id);
+      return res.json({ 
+        message: `Synced ${result.messages} messages across ${result.conversations} new conversations.`,
+        ...result
+      });
+    }
+
+    // Fallback to extension bridge
     const bridge = require('../services/linkedinBridge');
     const sent = bridge.syncInbox(req.user.id);
     if (sent) {
       res.json({ message: 'Sync command sent to extension. Messages will appear shortly.' });
     } else {
-      res.status(503).json({ error: 'Extension not connected. Please open the Chrome extension.' });
+      res.status(503).json({ error: 'No LinkedIn connection. Please connect via Integrations page.' });
     }
   } catch (err) {
+    console.error('[Inbox] Sync error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -256,6 +256,11 @@ for (const u of usersWithoutWorkspace) {
   }
 }
 
+// Migration: Add linkedinThreadId to conversations
+try {
+  db.prepare("ALTER TABLE conversations ADD COLUMN linkedinThreadId TEXT DEFAULT ''").run();
+} catch(e) { /* column already exists */ }
+
 // Create jobs queue table
 db.exec(`
   CREATE TABLE IF NOT EXISTS jobs (
@@ -299,6 +304,7 @@ db.exec(`
     lead_id TEXT,
     participantName TEXT DEFAULT '',
     participantUrl TEXT DEFAULT '',
+    linkedinThreadId TEXT DEFAULT '',
     lastMessage TEXT DEFAULT '',
     lastMessageAt TEXT DEFAULT (datetime('now')),
     unreadCount INTEGER DEFAULT 0,
