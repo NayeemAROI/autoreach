@@ -21,7 +21,7 @@ router.get('/', (req, res) => {
       SELECT c.*, l.firstName, l.lastName, l.company, l.linkedinUrl
       FROM conversations c
       LEFT JOIN leads l ON c.lead_id = l.id
-      WHERE c.user_id = ? AND (c.workspace_id = ? OR c.workspace_id = '')
+      WHERE c.user_id = ? AND c.workspace_id = ?
       ORDER BY c.lastMessageAt DESC
     `).all(req.user.id, wsId);
 
@@ -132,11 +132,12 @@ router.post('/sync', (req, res) => {
         const convId = uuidv4();
         // Try to link to existing lead
         const lead = db.prepare('SELECT id FROM leads WHERE linkedinUrl = ? AND user_id = ?').get(participantUrl, userId);
+        const wsId = getWorkspaceId(userId);
 
         db.prepare(`
-          INSERT INTO conversations (id, user_id, lead_id, participantName, participantUrl, lastMessage, lastMessageAt)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(convId, userId, lead?.id || null, participantName || '', participantUrl || '', content?.substring(0, 200) || '', timestamp || new Date().toISOString());
+          INSERT INTO conversations (id, user_id, workspace_id, lead_id, participantName, participantUrl, lastMessage, lastMessageAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(convId, userId, wsId, lead?.id || null, participantName || '', participantUrl || '', content?.substring(0, 200) || '', timestamp || new Date().toISOString());
 
         conversation = { id: convId };
       }

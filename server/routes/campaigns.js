@@ -16,7 +16,7 @@ router.use(auth);
 router.get('/', (req, res) => {
   try {
     const wsId = getWorkspaceId(req.user.id);
-    const campaigns = db.prepare('SELECT * FROM campaigns WHERE user_id = ? AND (workspace_id = ? OR workspace_id = \'\') ORDER BY createdAt DESC').all(req.user.id, wsId);
+    const campaigns = db.prepare('SELECT * FROM campaigns WHERE user_id = ? AND workspace_id = ? ORDER BY createdAt DESC').all(req.user.id, wsId);
     const parsed = campaigns.map(c => ({
       ...c,
       sequence: JSON.parse(c.sequence || '[]'),

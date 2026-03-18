@@ -27,7 +27,7 @@ router.get('/', (req, res) => {
     FROM leads l
     LEFT JOIN campaign_leads cl ON l.id = cl.lead_id
     LEFT JOIN campaigns c ON cl.campaign_id = c.id
-    WHERE l.user_id = ? AND (l.workspace_id = ? OR l.workspace_id = '')
+    WHERE l.user_id = ? AND l.workspace_id = ?
   `;
   const params = [userId, wsId];
 

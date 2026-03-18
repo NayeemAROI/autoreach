@@ -290,8 +290,9 @@ async function syncInbox(userId) {
     if (!dbConv) {
       const cId = uuidv4();
       const pUrl = participantUrl || `linkedin:${threadId}`;
-      db.prepare("INSERT INTO conversations (id, user_id, participantName, participantUrl, linkedinThreadId, lastMessage, lastMessageAt, unreadCount) VALUES (?, ?, ?, ?, ?, '', datetime('now'), 0)")
-        .run(cId, userId, participantName, pUrl, threadId);
+      const wsId = getActiveWorkspaceId(userId);
+      db.prepare("INSERT INTO conversations (id, user_id, workspace_id, participantName, participantUrl, linkedinThreadId, lastMessage, lastMessageAt, unreadCount) VALUES (?, ?, ?, ?, ?, ?, '', datetime('now'), 0)")
+        .run(cId, userId, wsId, participantName, pUrl, threadId);
       dbConv = { id: cId };
       totalConversations++;
     } else {

@@ -161,8 +161,10 @@ class ExtensionBridge extends EventEmitter {
       if (!conversation) {
         const convId = uuidv4();
         const lead = db.prepare('SELECT id FROM leads WHERE linkedinUrl = ? AND user_id = ?').get(participantUrl, userId);
-        db.prepare('INSERT INTO conversations (id, user_id, lead_id, participantName, participantUrl, lastMessage, lastMessageAt) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .run(convId, userId, lead?.id || null, participantName || '', participantUrl || '', content?.substring(0, 200) || '', timestamp || new Date().toISOString());
+        const wsUser = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+        const wsId = wsUser?.activeWorkspaceId || '';
+        db.prepare('INSERT INTO conversations (id, user_id, workspace_id, lead_id, participantName, participantUrl, lastMessage, lastMessageAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(convId, userId, wsId, lead?.id || null, participantName || '', participantUrl || '', content?.substring(0, 200) || '', timestamp || new Date().toISOString());
         conversation = { id: convId };
       }
 
