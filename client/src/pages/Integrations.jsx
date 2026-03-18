@@ -79,13 +79,26 @@ export default function Integrations() {
                 </div>
               </div>
             ) : (
-              <div className="mt-4 p-3 bg-bg-secondary rounded-lg border border-border border-dashed">
+              <div className="mt-4 p-3 bg-bg-secondary rounded-lg border border-border border-dashed space-y-3">
                 <div className="text-sm font-medium text-text-secondary flex items-start gap-2">
                   <MonitorSmartphone className="w-4 h-4 text-warning shrink-0 mt-0.5" />
                   <div>
                     <span className="block text-text-primary">Desktop Extension Not Connected</span>
                     <span className="text-xs text-text-muted mt-1 block">Ensure the Chrome Extension is installed and you are logged into LinkedIn.</span>
                   </div>
+                </div>
+                
+                <div className="pt-2 border-t border-border/50 flex justify-between items-center">
+                  <span className="text-xs text-text-muted">Need a manual connection?</span>
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(localStorage.getItem('token') || '');
+                      alert('Token copied! Paste it in the extension popup.');
+                    }}
+                    className="text-xs font-semibold text-primary hover:text-primary-light transition-colors"
+                  >
+                    Copy API Token
+                  </button>
                 </div>
               </div>
             )}
