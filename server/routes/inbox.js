@@ -71,18 +71,12 @@ router.post('/:id/reply', (req, res) => {
     db.prepare("UPDATE conversations SET lastMessage = ?, lastMessageAt = datetime('now') WHERE id = ?")
       .run(content.trim().substring(0, 200), req.params.id);
 
-    // TODO: Dispatch message via extension WebSocket
-    const { getClients } = require('../services/linkedinBridge');
-    const clients = getClients(req.user.id);
-    if (clients?.length > 0) {
-      clients[0].send(JSON.stringify({
-        type: 'SEND_MESSAGE',
-        payload: {
-          profileUrl: conversation.participantUrl,
-          message: content.trim()
-        }
-      }));
-    }
+    // Dispatch message via extension WebSocket
+    const bridge = require('../services/linkedinBridge');
+    bridge.sendCommand(req.user.id, 'SEND_MESSAGE', {
+      profileUrl: conversation.participantUrl,
+      message: content.trim()
+    });
 
     const message = db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId);
     res.status(201).json(message);

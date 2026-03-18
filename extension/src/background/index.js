@@ -190,6 +190,9 @@ async function handleInboxSync() {
   try {
     if (!session.li_at || !session.JSESSIONID) {
       console.warn('[Inbox Sync] No LinkedIn session available');
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'SYNC_ERROR', payload: { error: 'No LinkedIn session. Please log into LinkedIn first.' } }));
+      }
       return;
     }
 
@@ -198,71 +201,129 @@ async function handleInboxSync() {
       'Accept': 'application/vnd.linkedin.normalized+json+2.1',
       'x-li-lang': 'en_US',
       'x-restli-protocol-version': '2.0.0',
-      'csrf-token': session.JSESSIONID
+      'csrf-token': session.JSESSIONID,
+      'Cookie': `li_at=${session.li_at}; JSESSIONID="${session.JSESSIONID}"`
     };
 
-    // Fetch recent conversations
-    const convRes = await fetch('https://www.linkedin.com/voyager/api/messaging/conversations?keyVersion=LEGACY_INBOX&q=search', {
-      headers, credentials: 'include'
+    // Fetch recent conversations using the working endpoint
+    const convRes = await fetch('https://www.linkedin.com/voyager/api/messaging/conversations?keyVersion=LEGACY_INBOX', {
+      headers
     });
 
-    if (!convRes.ok) throw new Error(`Conversations fetch failed: ${convRes.status}`);
-    const convData = await convRes.json();
+    if (!convRes.ok) {
+      // Try alternate endpoint
+      console.warn(`[Inbox Sync] Primary endpoint returned ${convRes.status}, trying alternate...`);
+      const altRes = await fetch('https://www.linkedin.com/voyager/api/messaging/conversations', {
+        headers
+      });
+      if (!altRes.ok) {
+        throw new Error(`Conversations fetch failed: ${altRes.status}`);
+      }
+      var convData = await altRes.json();
+    } else {
+      var convData = await convRes.json();
+    }
 
     const messages = [];
     const conversations = convData.elements || [];
+    const included = convData.included || [];
 
-    for (const conv of conversations.slice(0, 20)) { // Last 20 conversations
+    console.log(`[Inbox Sync] Found ${conversations.length} conversations, ${included.length} included entities`);
+
+    for (const conv of conversations.slice(0, 20)) {
       const participants = conv.participants || [];
-      const lastEvent = conv.events?.[0];
-
-      // Get messages for this conversation
-      const convId = conv.entityUrn?.split(':').pop();
+      const convUrn = conv.entityUrn || conv['*conversation'] || '';
+      const convId = convUrn.split(':').pop();
       if (!convId) continue;
 
+      // Extract participant info from included data
+      let participantName = '';
+      let participantUrl = '';
+
+      for (const p of participants) {
+        const memberUrn = typeof p === 'string' ? p :
+          p['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile?.entityUrn ||
+          p.miniProfile?.entityUrn ||
+          p['*miniProfile'] ||
+          p.entityUrn || '';
+        const profileId = memberUrn.split(':').pop();
+
+        // Search included array for matching profile
+        const profile = included.find(i =>
+          (i.$type === 'com.linkedin.voyager.identity.shared.MiniProfile' ||
+           i.$type === 'com.linkedin.voyager.messaging.MessagingMember' ||
+           i.firstName) &&
+          (i.publicIdentifier === profileId ||
+           i.entityUrn?.includes(profileId) ||
+           i['*miniProfile']?.includes(profileId))
+        );
+
+        if (profile && profile.firstName) {
+          participantName = `${profile.firstName} ${profile.lastName || ''}`;
+          participantUrl = `https://www.linkedin.com/in/${profile.publicIdentifier || profileId}`;
+          break;
+        }
+      }
+
+      // If no name found from participants, try to get it from included miniprofiles
+      if (!participantName && included.length > 0) {
+        const convMember = included.find(i =>
+          i.$type?.includes('MessagingMember') &&
+          i.entityUrn?.includes(convId)
+        );
+        if (convMember) {
+          const mp = included.find(i =>
+            i.$type?.includes('MiniProfile') &&
+            convMember['*miniProfile']?.includes(i.entityUrn?.split(':').pop())
+          );
+          if (mp) {
+            participantName = `${mp.firstName} ${mp.lastName || ''}`;
+            participantUrl = `https://www.linkedin.com/in/${mp.publicIdentifier}`;
+          }
+        }
+      }
+
+      // Fetch messages for this conversation
       try {
         const msgRes = await fetch(`https://www.linkedin.com/voyager/api/messaging/conversations/${convId}/events?count=10`, {
-          headers, credentials: 'include'
+          headers
         });
 
         if (msgRes.ok) {
           const msgData = await msgRes.json();
           const events = msgData.elements || [];
 
-          // Find participant profile info from included data
-          let participantName = '';
-          let participantUrl = '';
-          const included = convData.included || [];
-          for (const p of participants) {
-            const urn = typeof p === 'string' ? p : p['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile?.entityUrn || p.entityUrn || '';
-            const profileId = urn.split(':').pop();
-            const profile = included.find(i => i.publicIdentifier === profileId || i.entityUrn?.includes(profileId));
-            if (profile && profile.firstName) {
-              participantName = `${profile.firstName} ${profile.lastName || ''}`;
-              participantUrl = `https://www.linkedin.com/in/${profile.publicIdentifier || profileId}`;
-            }
-          }
-
           for (const evt of events) {
             const body = evt.eventContent?.['com.linkedin.voyager.messaging.event.MessageEvent'];
             if (!body) continue;
 
-            const senderUrn = evt.from?.['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile?.entityUrn || evt.from?.entityUrn || '';
-            const isFromMe = senderUrn.includes(conv.hostUrn?.split(':').pop() || '__no_match__');
+            // Determine direction
+            const senderUrn = evt.from?.['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile?.entityUrn ||
+              evt.from?.miniProfile?.entityUrn ||
+              evt.from?.entityUrn || '';
+
+            // The user's own profile URN is in conv.hostUrn or we can check against "me"
+            const myUrn = conv.hostUrn || conv['*hostProfile'] || '';
+            const isFromMe = myUrn && senderUrn.includes(myUrn.split(':').pop());
 
             messages.push({
-              participantName,
-              participantUrl,
+              participantName: participantName || 'Unknown',
+              participantUrl: participantUrl || '',
               content: body.body || body.attributedBody?.text || '',
               direction: isFromMe ? 'outbound' : 'inbound',
-              linkedinMessageId: evt.entityUrn || '',
+              linkedinMessageId: evt.entityUrn || `${convId}_${evt.createdAt}`,
               timestamp: evt.createdAt ? new Date(evt.createdAt).toISOString() : new Date().toISOString()
             });
           }
+        } else {
+          console.warn(`[Inbox Sync] Messages fetch for conv ${convId}: ${msgRes.status}`);
         }
       } catch (e) {
-        console.warn(`[Inbox Sync] Failed to fetch messages for conv ${convId}`, e);
+        console.warn(`[Inbox Sync] Failed to fetch messages for conv ${convId}`, e.message);
       }
+
+      // Small delay between requests to avoid rate limiting
+      await new Promise(r => setTimeout(r, 300));
     }
 
     console.log(`[Inbox Sync] Scraped ${messages.length} messages from ${conversations.length} conversations`);
@@ -275,6 +336,9 @@ async function handleInboxSync() {
     }
   } catch (err) {
     console.error('[Inbox Sync] Error:', err.message);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'SYNC_ERROR', payload: { error: err.message } }));
+    }
   }
 }
 
@@ -400,14 +464,5 @@ async function sendMessageToContentScript(url, msg) {
   });
 }
 
-// Initialize
-chrome.storage.local.get(['outreach_token'], (res) => {
-  if (res.outreach_token) {
-    authToken = res.outreach_token;
-    console.log('[Automation Bridge] Token loaded from storage');
-    connect();
-  } else {
-    console.log('[Automation Bridge] No API Key set. Please click the extension icon.');
-  }
-});
+// Initialize session on startup (token loading is handled at line 13)
 extractSession();
