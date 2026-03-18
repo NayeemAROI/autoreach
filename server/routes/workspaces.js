@@ -192,6 +192,18 @@ router.post('/:id/connect', async (req, res) => {
     const memberId = data.publicIdentifier || data.miniProfile?.publicIdentifier || '';
     const profileUrl = memberId ? `https://linkedin.com/in/${memberId}` : '';
 
+    // Check if this LinkedIn profile is already connected to another workspace
+    if (memberId) {
+      const existing = db.prepare(
+        'SELECT id, name FROM workspaces WHERE linkedin_member_id = ? AND linkedin_cookie_valid = 1 AND id != ?'
+      ).get(memberId, id);
+      if (existing) {
+        return res.status(409).json({ 
+          error: `This LinkedIn account is already connected to workspace "${existing.name}". Disconnect it there first.` 
+        });
+      }
+    }
+
     db.prepare(`
       UPDATE workspaces SET 
         linkedin_cookie = ?, linkedin_csrf = ?, linkedin_cookie_valid = 1,
