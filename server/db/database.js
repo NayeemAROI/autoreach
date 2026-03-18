@@ -256,6 +256,61 @@ for (const u of usersWithoutWorkspace) {
   }
 }
 
+// ===== Multi-workspace LinkedIn support =====
+// Add LinkedIn columns to workspaces table
+const wsColumns = db.prepare("PRAGMA table_info(workspaces)").all();
+if (!wsColumns.some(col => col.name === 'linkedin_cookie')) {
+  console.log('Migration: Adding LinkedIn columns to workspaces');
+  try {
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_cookie TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_csrf TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_cookie_valid INTEGER DEFAULT 0").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_profile_name TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_profile_url TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_member_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_connected_at TEXT DEFAULT ''").run();
+    // Copy LinkedIn data from users to their default workspace
+    db.prepare(`
+      UPDATE workspaces SET 
+        linkedin_cookie = (SELECT linkedin_cookie FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_csrf = (SELECT linkedin_csrf FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_cookie_valid = (SELECT linkedin_cookie_valid FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_profile_name = (SELECT linkedin_profile_name FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_profile_url = (SELECT linkedin_profile_url FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_connected_at = (SELECT linkedin_connected_at FROM users WHERE users.id = workspaces.owner_id)
+    `).run();
+    console.log('Migration: Copied LinkedIn data from users to workspaces');
+  } catch(e) {
+    console.warn('Workspace LinkedIn migration warning:', e.message);
+  }
+}
+
+// Add workspace_id to data tables
+const leadsColumns = db.prepare("PRAGMA table_info(leads)").all();
+if (!leadsColumns.some(col => col.name === 'workspace_id')) {
+  console.log('Migration: Adding workspace_id to data tables');
+  try {
+    db.prepare("ALTER TABLE leads ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE campaigns ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE activities ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE events ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE conversations ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    // Populate workspace_id from user's active workspace
+    db.prepare(`UPDATE leads SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = leads.user_id) WHERE workspace_id = ''`).run();
+    db.prepare(`UPDATE campaigns SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = campaigns.user_id) WHERE workspace_id = ''`).run();
+    db.prepare(`UPDATE activities SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = activities.user_id) WHERE workspace_id = ''`).run();
+    db.prepare(`UPDATE events SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = events.user_id) WHERE workspace_id = ''`).run();
+    db.prepare(`UPDATE conversations SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = conversations.user_id) WHERE workspace_id = ''`).run();
+    // Create indexes
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_leads_workspace ON leads(workspace_id)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_campaigns_workspace ON campaigns(workspace_id)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id)').run();
+    console.log('Migration: workspace_id added and populated on all data tables');
+  } catch(e) {
+    console.warn('workspace_id migration warning:', e.message);
+  }
+}
+
 // Migration: Add linkedinThreadId to conversations
 try {
   db.prepare("ALTER TABLE conversations ADD COLUMN linkedinThreadId TEXT DEFAULT ''").run();

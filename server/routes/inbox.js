@@ -5,18 +5,25 @@ const authenticate = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 const linkedinApi = require('../services/linkedinApi');
 
+// Helper: get user's active workspace_id
+function getWorkspaceId(userId) {
+  const user = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+  return user?.activeWorkspaceId || '';
+}
+
 router.use(authenticate);
 
 // GET /api/inbox - list all conversations for user
 router.get('/', (req, res) => {
   try {
+    const wsId = getWorkspaceId(req.user.id);
     const conversations = db.prepare(`
       SELECT c.*, l.firstName, l.lastName, l.company, l.linkedinUrl
       FROM conversations c
       LEFT JOIN leads l ON c.lead_id = l.id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ? AND (c.workspace_id = ? OR c.workspace_id = '')
       ORDER BY c.lastMessageAt DESC
-    `).all(req.user.id);
+    `).all(req.user.id, wsId);
 
     const totalUnread = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
     res.json({ conversations, totalUnread });

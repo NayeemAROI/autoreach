@@ -4,6 +4,12 @@ const db = require('../db/database');
 const { v4: uuidv4 } = require('uuid');
 const auth = require('../middleware/auth');
 
+// Helper: get user's active workspace_id
+function getWorkspaceId(userId) {
+  const user = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+  return user?.activeWorkspaceId || '';
+}
+
 // Apply auth middleware
 router.use(auth);
 
@@ -11,6 +17,7 @@ router.use(auth);
 router.get('/', (req, res) => {
   const { search, status, verification_status, tag, campaign, dateFrom, dateTo, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
   const userId = req.user.id;
+  const wsId = getWorkspaceId(userId);
   
   let query = `
     SELECT 
@@ -20,9 +27,9 @@ router.get('/', (req, res) => {
     FROM leads l
     LEFT JOIN campaign_leads cl ON l.id = cl.lead_id
     LEFT JOIN campaigns c ON cl.campaign_id = c.id
-    WHERE l.user_id = ?
+    WHERE l.user_id = ? AND (l.workspace_id = ? OR l.workspace_id = '')
   `;
-  const params = [userId];
+  const params = [userId, wsId];
 
   if (search) {
     query += ' AND (l.firstName LIKE ? OR l.lastName LIKE ? OR l.company LIKE ? OR l.email LIKE ? OR l.title LIKE ?)';
@@ -116,12 +123,13 @@ router.post('/', (req, res) => {
   const { firstName, lastName, title, company, linkedinUrl, email, phone, tags, source } = req.body;
   const id = uuidv4();
   const userId = req.user.id;
+  const wsId = getWorkspaceId(userId);
   
   try {
     db.prepare(`
-      INSERT INTO leads (id, user_id, firstName, lastName, title, company, linkedinUrl, email, phone, tags, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, userId, firstName, lastName, title || '', company || '', linkedinUrl || '', email || '', phone || '', JSON.stringify(tags || []), source || 'manual');
+      INSERT INTO leads (id, user_id, workspace_id, firstName, lastName, title, company, linkedinUrl, email, phone, tags, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, userId, wsId, firstName, lastName, title || '', company || '', linkedinUrl || '', email || '', phone || '', JSON.stringify(tags || []), source || 'manual');
     
     const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
     lead.tags = JSON.parse(lead.tags || '[]');
@@ -135,12 +143,13 @@ router.post('/', (req, res) => {
 router.post('/import', (req, res) => {
   const { leads } = req.body;
   const userId = req.user.id;
+  const wsId = getWorkspaceId(userId);
 
   if (!Array.isArray(leads)) return res.status(400).json({ error: 'leads must be an array' });
 
   const insert = db.prepare(`
-    INSERT INTO leads (id, user_id, firstName, lastName, title, company, linkedinUrl, email, phone, tags, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO leads (id, user_id, workspace_id, firstName, lastName, title, company, linkedinUrl, email, phone, tags, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const checkExisting = db.prepare(`
@@ -160,7 +169,7 @@ router.post('/import', (req, res) => {
         continue;
       }
 
-      insert.run(uuidv4(), userId, l.firstName, l.lastName, l.title || '', l.company || '', l.linkedinUrl || '', l.email || '', l.phone || '', JSON.stringify(l.tags || []), 'csv_import');
+      insert.run(uuidv4(), userId, wsId, l.firstName, l.lastName, l.title || '', l.company || '', l.linkedinUrl || '', l.email || '', l.phone || '', JSON.stringify(l.tags || []), 'csv_import');
       importedCount++;
     }
     return { importedCount, skippedCount };

@@ -1,118 +1,235 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db/database');
-const auth = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
+const auth = require('../middleware/auth');
 
 router.use(auth);
 
-// GET /api/workspaces - list user's workspaces
+// GET /api/workspaces — List user's workspaces
 router.get('/', (req, res) => {
+  const userId = req.user.id;
+  const user = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+  
   const workspaces = db.prepare(`
-    SELECT w.*, wm.role as memberRole,
-      (SELECT COUNT(*) FROM workspace_members WHERE workspace_id = w.id) as memberCount
+    SELECT w.*, wm.role as memberRole
     FROM workspaces w
-    JOIN workspace_members wm ON wm.workspace_id = w.id
+    JOIN workspace_members wm ON w.id = wm.workspace_id
     WHERE wm.user_id = ?
-  `).all(req.user.id);
-  res.json({ workspaces });
+    ORDER BY w.createdAt ASC
+  `).all(userId);
+
+  // Add stats per workspace
+  const result = workspaces.map(ws => ({
+    id: ws.id,
+    name: ws.name,
+    slug: ws.slug,
+    role: ws.memberRole,
+    isActive: ws.id === user?.activeWorkspaceId,
+    linkedinConnected: !!ws.linkedin_cookie_valid,
+    linkedinProfileName: ws.linkedin_profile_name || '',
+    linkedinProfileUrl: ws.linkedin_profile_url || '',
+    linkedinMemberId: ws.linkedin_member_id || '',
+    leadsCount: db.prepare('SELECT COUNT(*) as c FROM leads WHERE workspace_id = ?').get(ws.id)?.c || 0,
+    campaignsCount: db.prepare('SELECT COUNT(*) as c FROM campaigns WHERE workspace_id = ?').get(ws.id)?.c || 0,
+    createdAt: ws.createdAt,
+  }));
+
+  res.json({ workspaces: result, activeWorkspaceId: user?.activeWorkspaceId });
 });
 
-// POST /api/workspaces - create workspace
+// POST /api/workspaces — Create new workspace
 router.post('/', (req, res) => {
+  const userId = req.user.id;
   const { name } = req.body;
-  if (!name) return res.status(400).json({ error: 'Workspace name required' });
 
-  const id = uuidv4();
-  const slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-') + '-' + Date.now().toString(36);
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Workspace name is required.' });
+  }
+
+  // Check plan limits
+  const user = db.prepare('SELECT plan FROM users WHERE id = ?').get(userId);
+  const wsCount = db.prepare('SELECT COUNT(*) as c FROM workspace_members WHERE user_id = ?').get(userId)?.c || 0;
+  const limits = { free: 1, pro: 3, business: 10 };
+  const maxWs = limits[user?.plan] || 1;
+
+  if (wsCount >= maxWs) {
+    return res.status(403).json({ error: `Your ${user?.plan || 'free'} plan allows up to ${maxWs} workspace(s). Upgrade to add more.` });
+  }
+
+  const wsId = uuidv4();
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') + '-' + Date.now().toString(36);
 
   try {
-    db.prepare('INSERT INTO workspaces (id, name, slug, owner_id) VALUES (?, ?, ?, ?)').run(id, name, slug, req.user.id);
-    db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run(uuidv4(), id, req.user.id, 'owner');
-    res.status(201).json({ workspace: { id, name, slug } });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    db.prepare('INSERT INTO workspaces (id, name, slug, owner_id) VALUES (?, ?, ?, ?)').run(wsId, name.trim(), slug, userId);
+    db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run(uuidv4(), wsId, userId, 'owner');
+
+    res.json({
+      workspace: { id: wsId, name: name.trim(), slug, linkedinConnected: false },
+      message: 'Workspace created! Connect a LinkedIn account to start.'
+    });
+  } catch (e) {
+    console.error('Create workspace error:', e);
+    res.status(500).json({ error: 'Failed to create workspace.' });
   }
 });
 
-// POST /api/workspaces/:id/switch - switch active workspace
+// PATCH /api/workspaces/:id — Update workspace name
+router.patch('/:id', (req, res) => {
+  const { id } = req.params;
+  const { name } = req.body;
+  const userId = req.user.id;
+
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+  if (ws.owner_id !== userId) return res.status(403).json({ error: 'Only the owner can update this workspace.' });
+
+  if (name) {
+    db.prepare('UPDATE workspaces SET name = ? WHERE id = ?').run(name.trim(), id);
+  }
+
+  res.json({ success: true });
+});
+
+// DELETE /api/workspaces/:id — Delete workspace and all its data
+router.delete('/:id', (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+  if (ws.owner_id !== userId) return res.status(403).json({ error: 'Only the owner can delete this workspace.' });
+
+  // Don't allow deleting last workspace
+  const wsCount = db.prepare('SELECT COUNT(*) as c FROM workspace_members WHERE user_id = ?').get(userId)?.c || 0;
+  if (wsCount <= 1) return res.status(400).json({ error: 'Cannot delete your only workspace.' });
+
+  try {
+    // Delete all workspace data
+    db.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE workspace_id = ?)').run(id);
+    db.prepare('DELETE FROM conversations WHERE workspace_id = ?').run(id);
+    db.prepare('DELETE FROM campaign_leads WHERE campaign_id IN (SELECT id FROM campaigns WHERE workspace_id = ?)').run(id);
+    db.prepare('DELETE FROM activities WHERE workspace_id = ?').run(id);
+    db.prepare('DELETE FROM events WHERE workspace_id = ?').run(id);
+    db.prepare('DELETE FROM leads WHERE workspace_id = ?').run(id);
+    db.prepare('DELETE FROM campaigns WHERE workspace_id = ?').run(id);
+    db.prepare('DELETE FROM workspace_members WHERE workspace_id = ?').run(id);
+    db.prepare('DELETE FROM workspaces WHERE id = ?').run(id);
+
+    // If this was the active workspace, switch to another
+    const user = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+    if (user?.activeWorkspaceId === id) {
+      const nextWs = db.prepare('SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1').get(userId);
+      if (nextWs) {
+        db.prepare('UPDATE users SET activeWorkspaceId = ? WHERE id = ?').run(nextWs.workspace_id, userId);
+      }
+    }
+
+    res.json({ success: true, message: 'Workspace and all data deleted.' });
+  } catch (e) {
+    console.error('Delete workspace error:', e);
+    res.status(500).json({ error: 'Failed to delete workspace.' });
+  }
+});
+
+// POST /api/workspaces/:id/switch — Switch active workspace
 router.post('/:id/switch', (req, res) => {
-  const wsId = req.params.id;
-  const member = db.prepare('SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, req.user.id);
-  if (!member) return res.status(403).json({ error: 'Not a member of this workspace' });
+  const { id } = req.params;
+  const userId = req.user.id;
 
-  db.prepare('UPDATE users SET activeWorkspaceId = ? WHERE id = ?').run(wsId, req.user.id);
-  res.json({ message: 'Switched workspace', activeWorkspaceId: wsId });
+  // Verify user has access
+  const membership = db.prepare('SELECT * FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(id, userId);
+  if (!membership) return res.status(403).json({ error: 'No access to this workspace.' });
+
+  db.prepare('UPDATE users SET activeWorkspaceId = ? WHERE id = ?').run(id, userId);
+
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
+  res.json({
+    success: true,
+    workspace: {
+      id: ws.id,
+      name: ws.name,
+      linkedinConnected: !!ws.linkedin_cookie_valid,
+      linkedinProfileName: ws.linkedin_profile_name || '',
+    }
+  });
 });
 
-// GET /api/workspaces/:id/members - list members
-router.get('/:id/members', (req, res) => {
-  const wsId = req.params.id;
-  const member = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, req.user.id);
-  if (!member) return res.status(403).json({ error: 'Not a member' });
+// POST /api/workspaces/:id/connect — Connect LinkedIn to workspace
+router.post('/:id/connect', async (req, res) => {
+  const { id } = req.params;
+  const { cookie } = req.body;
+  const userId = req.user.id;
 
-  const members = db.prepare(`
-    SELECT u.id, u.name, u.email, wm.role, wm.joinedAt
-    FROM workspace_members wm
-    JOIN users u ON u.id = wm.user_id
-    WHERE wm.workspace_id = ?
-  `).all(wsId);
-  res.json({ members });
-});
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+  if (ws.owner_id !== userId) return res.status(403).json({ error: 'Only the owner can connect LinkedIn.' });
 
-// POST /api/workspaces/:id/invite - invite member
-router.post('/:id/invite', (req, res) => {
-  const wsId = req.params.id;
-  const { email, role = 'member' } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email required' });
-  if (!['admin', 'member'].includes(role)) return res.status(400).json({ error: 'Role must be admin or member' });
-
-  // Check requester is owner or admin
-  const requester = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, req.user.id);
-  if (!requester || !['owner', 'admin'].includes(requester.role)) {
-    return res.status(403).json({ error: 'Only owners and admins can invite members' });
+  if (!cookie || !cookie.trim()) {
+    return res.status(400).json({ error: 'LinkedIn cookie (li_at) is required.' });
   }
 
-  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase());
-  if (!user) return res.status(404).json({ error: 'User not found. They must register first.' });
+  const liAt = cookie.trim();
+  const csrf = `ajax:${Date.now()}`;
 
-  const existing = db.prepare('SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, user.id);
-  if (existing) return res.status(409).json({ error: 'User is already a member' });
+  // Validate by calling LinkedIn /me endpoint
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const response = await fetch('https://www.linkedin.com/voyager/api/me', {
+      headers: {
+        'cookie': `li_at=${liAt}; JSESSIONID="${csrf}"`,
+        'csrf-token': csrf,
+        'x-restli-protocol-version': '2.0.0',
+      }
+    });
 
-  db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run(uuidv4(), wsId, user.id, role);
-  res.json({ message: `Invited ${email} as ${role}` });
-});
+    if (!response.ok) {
+      return res.status(400).json({ error: 'Invalid LinkedIn cookie. Please check and try again.' });
+    }
 
-// DELETE /api/workspaces/:id/members/:userId - remove member
-router.delete('/:id/members/:userId', (req, res) => {
-  const wsId = req.params.id;
-  const targetUserId = req.params.userId;
+    const data = await response.json();
+    const profileName = `${data.firstName || ''} ${data.lastName || ''}`.trim() || 'LinkedIn User';
+    const memberId = data.publicIdentifier || data.miniProfile?.publicIdentifier || '';
+    const profileUrl = memberId ? `https://linkedin.com/in/${memberId}` : '';
 
-  const requester = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, req.user.id);
-  if (!requester || !['owner', 'admin'].includes(requester.role)) {
-    return res.status(403).json({ error: 'Insufficient permissions' });
+    db.prepare(`
+      UPDATE workspaces SET 
+        linkedin_cookie = ?, linkedin_csrf = ?, linkedin_cookie_valid = 1,
+        linkedin_profile_name = ?, linkedin_profile_url = ?, linkedin_member_id = ?,
+        linkedin_connected_at = datetime('now')
+      WHERE id = ?
+    `).run(liAt, csrf, profileName, profileUrl, memberId, id);
+
+    res.json({
+      success: true,
+      profileName,
+      profileUrl,
+      memberId,
+    });
+  } catch (err) {
+    console.error('LinkedIn connect error:', err);
+    res.status(500).json({ error: 'Failed to validate LinkedIn cookie.' });
   }
-
-  // Can't remove the owner
-  const target = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, targetUserId);
-  if (target?.role === 'owner') return res.status(400).json({ error: 'Cannot remove workspace owner' });
-
-  db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(wsId, targetUserId);
-  res.json({ message: 'Member removed' });
 });
 
-// PATCH /api/workspaces/:id/members/:userId - change member role
-router.patch('/:id/members/:userId', (req, res) => {
-  const wsId = req.params.id;
-  const targetUserId = req.params.userId;
-  const { role } = req.body;
-  if (!['admin', 'member'].includes(role)) return res.status(400).json({ error: 'Role must be admin or member' });
+// POST /api/workspaces/:id/disconnect — Disconnect LinkedIn from workspace
+router.post('/:id/disconnect', (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
 
-  const requester = db.prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, req.user.id);
-  if (requester?.role !== 'owner') return res.status(403).json({ error: 'Only owners can change roles' });
+  const ws = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
+  if (!ws) return res.status(404).json({ error: 'Workspace not found.' });
+  if (ws.owner_id !== userId) return res.status(403).json({ error: 'Only the owner can disconnect LinkedIn.' });
 
-  db.prepare('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?').run(role, wsId, targetUserId);
-  res.json({ message: `Role updated to ${role}` });
+  db.prepare(`
+    UPDATE workspaces SET 
+      linkedin_cookie = '', linkedin_csrf = '', linkedin_cookie_valid = 0,
+      linkedin_profile_name = '', linkedin_profile_url = '', linkedin_member_id = '',
+      linkedin_connected_at = ''
+    WHERE id = ?
+  `).run(id);
+
+  res.json({ success: true });
 });
 
 module.exports = router;

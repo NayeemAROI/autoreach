@@ -77,18 +77,24 @@ export const AuthProvider = ({ children }) => {
           });
           if (res.ok) {
             const data = await res.json();
-            setUser(data.user);
+            // Load workspaces
+            const wsRes = await fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } });
+            const wsData = wsRes.ok ? await wsRes.json() : { workspaces: [] };
+            setUser({ ...data.user, workspaces: wsData.workspaces, activeWorkspaceId: wsData.activeWorkspaceId });
             scheduleTokenRefresh(token);
           } else {
             // Try refresh
             const refreshed = await refreshAccessToken();
             if (refreshed) {
+              const newToken = localStorage.getItem('token');
               const retryRes = await fetch('/api/auth/me', {
-                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+                headers: { Authorization: `Bearer ${newToken}` }
               });
               if (retryRes.ok) {
                 const data = await retryRes.json();
-                setUser(data.user);
+                const wsRes = await fetch('/api/workspaces', { headers: { Authorization: `Bearer ${newToken}` } });
+                const wsData = wsRes.ok ? await wsRes.json() : { workspaces: [] };
+                setUser({ ...data.user, workspaces: wsData.workspaces, activeWorkspaceId: wsData.activeWorkspaceId });
               }
             } else {
               setToken(null);
@@ -177,14 +183,35 @@ export const AuthProvider = ({ children }) => {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (res.ok) {
-      setUser(prev => ({ ...prev, activeWorkspaceId: workspaceId }));
-      // Refresh token to include new workspace
-      await refreshAccessToken();
+      const data = await res.json();
+      setUser(prev => ({
+        ...prev,
+        activeWorkspaceId: workspaceId,
+        workspaces: prev.workspaces?.map(ws => ({ ...ws, isActive: ws.id === workspaceId }))
+      }));
+      // Reload page to refresh all data for new workspace
+      window.location.reload();
     }
   };
 
+  const createWorkspace = async (name) => {
+    const res = await fetch('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      // Refresh workspaces
+      const wsRes = await fetch('/api/workspaces', { headers: { Authorization: `Bearer ${token}` } });
+      const wsData = wsRes.ok ? await wsRes.json() : { workspaces: [] };
+      setUser(prev => ({ ...prev, workspaces: wsData.workspaces }));
+    }
+    return { ok: res.ok, data };
+  };
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, completeOnboarding, switchWorkspace, refreshAccessToken }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, completeOnboarding, switchWorkspace, createWorkspace, refreshAccessToken }}>
       {children}
     </AuthContext.Provider>
   );

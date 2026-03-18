@@ -4,12 +4,19 @@ const db = require('../db/database');
 const { v4: uuidv4 } = require('uuid');
 const auth = require('../middleware/auth');
 
+// Helper: get user's active workspace_id
+function getWorkspaceId(userId) {
+  const user = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+  return user?.activeWorkspaceId || '';
+}
+
 router.use(auth);
 
 // GET all campaigns
 router.get('/', (req, res) => {
   try {
-    const campaigns = db.prepare('SELECT * FROM campaigns WHERE user_id = ? ORDER BY createdAt DESC').all(req.user.id);
+    const wsId = getWorkspaceId(req.user.id);
+    const campaigns = db.prepare('SELECT * FROM campaigns WHERE user_id = ? AND (workspace_id = ? OR workspace_id = \'\') ORDER BY createdAt DESC').all(req.user.id, wsId);
     const parsed = campaigns.map(c => ({
       ...c,
       sequence: JSON.parse(c.sequence || '[]'),
@@ -43,12 +50,13 @@ router.post('/', (req, res) => {
   const { name, type, sequence, leadIds, schedule } = req.body;
   const id = uuidv4();
   const userId = req.user.id;
+  const wsId = getWorkspaceId(userId);
   
   try {
     db.prepare(`
-      INSERT INTO campaigns (id, user_id, name, type, sequence, leadIds, schedule)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, userId, name, type || 'linkedin', JSON.stringify(sequence || []), JSON.stringify(leadIds || []), JSON.stringify(schedule || {}));
+      INSERT INTO campaigns (id, user_id, workspace_id, name, type, sequence, leadIds, schedule)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, userId, wsId, name, type || 'linkedin', JSON.stringify(sequence || []), JSON.stringify(leadIds || []), JSON.stringify(schedule || {}));
 
     const campaign = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(id);
     campaign.sequence = JSON.parse(campaign.sequence);
