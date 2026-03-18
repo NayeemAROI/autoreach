@@ -20,6 +20,10 @@
     {
       "matches": ["*://*.linkedin.com/*"],
       "js": ["src/content/index.js"]
+    },
+    {
+      "matches": ["http://localhost/*", "http://127.0.0.1/*", "http://localhost:5174/*"],
+      "js": ["src/content/app-sync.js"]
     }
   ],
   "action": {

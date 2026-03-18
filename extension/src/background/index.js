@@ -19,15 +19,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
   else if (request.type === 'TOKEN_UPDATED') {
-    chrome.storage.local.get(['outreach_token'], (res) => {
-      authToken = res.outreach_token;
-      console.log('[Automation Bridge] Token updated, reconnecting...');
-      if (ws) {
-        ws.close(); // will trigger reconnect with new token
-      } else {
-        connect();
-      }
-    });
+    if (request.token) {
+      chrome.storage.local.set({ outreach_token: request.token }, () => {
+        authToken = request.token;
+        console.log('[Automation Bridge] Auto-synced token from Web App, reconnecting...');
+        if (ws) ws.close(); else connect();
+      });
+    } else {
+      chrome.storage.local.get(['outreach_token'], (res) => {
+        authToken = res.outreach_token;
+        console.log('[Automation Bridge] Token updated, reconnecting...');
+        if (ws) ws.close(); else connect();
+      });
+    }
   } else if (request.type === 'ACTION_COMPLETED' || request.type === 'ACTION_FAILED' || request.type === 'PROFILE_DATA' || request.type === 'MESSAGES_DATA') {
     // Forward from Content Script to backend
     if (ws && ws.readyState === WebSocket.OPEN) {

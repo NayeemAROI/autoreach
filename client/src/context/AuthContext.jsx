@@ -48,6 +48,13 @@ export const AuthProvider = ({ children }) => {
     } catch (e) { /* ignore parse errors */ }
   }, [refreshAccessToken]);
 
+  // Broadcast token to extension
+  useEffect(() => {
+    if (token) {
+      window.postMessage({ type: 'AUTOREACH_AUTH_TOKEN', token }, '*');
+    }
+  }, [token]);
+
   useEffect(() => {
     const loadUser = async () => {
       if (token) {

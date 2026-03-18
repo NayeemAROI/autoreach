@@ -9,8 +9,6 @@ export default function Settings() {
   const [settings, setSettings] = useState(null)
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState(null)
-  const [tokenHint, setTokenHint] = useState('Copy below')
-
   useEffect(() => {
     apiFetch('/api/settings')
       .then(res => res.json())
@@ -46,15 +44,6 @@ export default function Settings() {
   const showToast = (message, type) => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3000)
-  }
-
-  const copyToken = () => {
-    const token = localStorage.getItem('token')
-    if (token) {
-      navigator.clipboard.writeText(token)
-      setTokenHint('Copied!')
-      setTimeout(() => setTokenHint('Copy below'), 2000)
-    }
   }
 
   if (!settings) return (
@@ -100,33 +89,6 @@ export default function Settings() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column (Main Settings) */}
         <div className="lg:col-span-2 space-y-6">
-
-          {/* Connect Extension */}
-          <section className="glass-card p-6 animate-fade-in text-left">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                <Key className="w-5 h-5 text-primary-light" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-text-primary">Extension Authorization</h2>
-                <p className="text-sm text-text-muted">Paste this API Key into your Chrome Extension</p>
-              </div>
-            </div>
-            
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-xs font-semibold text-text-secondary">Your API Key</span>
-                <span className="text-xs text-primary-light">{tokenHint}</span>
-              </div>
-              <div 
-                onClick={copyToken}
-                className="bg-bg-elevated border border-border rounded-lg p-3 text-sm font-mono text-text-muted truncate cursor-pointer hover:border-primary/50 transition-colors tooltip relative select-none"
-                data-tooltip="Click to copy"
-              >
-                {localStorage.getItem('token') || 'No token found'}
-              </div>
-            </div>
-          </section>
           
           {/* Daily Limits */}
           <section className="glass-card p-6 animate-fade-in animate-fade-in-delay-1">
