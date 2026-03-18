@@ -47,8 +47,8 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
       return res.status(400).json({ error: result.error || 'Cookie validation failed.' });
     }
 
-    // Save to DB
-    linkedinApi.saveCookie(req.user.id, trimmed, result.csrf, result.profileName, result.profileUrl);
+    // Save to DB (including memberId needed for messaging API)
+    linkedinApi.saveCookie(req.user.id, trimmed, result.csrf, result.profileName, result.profileUrl, result.memberId);
     console.log(`[Integrations] LinkedIn connected for ${result.profileName}`);
     
     res.json({

@@ -1,6 +1,9 @@
 /**
  * Server-side LinkedIn API service using cookie injection.
- * Same approach as Phantombuster - uses the user's li_at cookie to call Voyager API.
+ * Uses LinkedIn's Dash REST API (as of 2025) for messaging.
+ * 
+ * Working endpoint discovered via browser network capture:
+ *   voyagerMessagingDashMessengerConversations?q=syncToken&mailboxUrn=urn:li:fsd_profile:{memberId}
  */
 
 const db = require('../db/database');
@@ -13,66 +16,25 @@ function getHeaders(li_at, csrf) {
     'Accept': 'application/vnd.linkedin.normalized+json+2.1',
     'x-li-lang': 'en_US',
     'x-restli-protocol-version': '2.0.0',
+    'x-li-track': JSON.stringify({
+      clientVersion: '1.13.42903',
+      osName: 'web',
+      deviceFormFactor: 'DESKTOP',
+      mpName: 'voyager-web'
+    }),
     'csrf-token': csrf,
     'Cookie': `li_at=${li_at}; JSESSIONID="${csrf}"`,
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://www.linkedin.com/messaging/'
   };
 }
 
 /**
- * Fetch the real JSESSIONID from LinkedIn by visiting the site with li_at cookie.
- * LinkedIn sets JSESSIONID in response cookies.
- */
-async function fetchJsessionId(li_at) {
-  try {
-    // Visit LinkedIn with just the li_at cookie to get JSESSIONID
-    const res = await fetch('https://www.linkedin.com/voyager/api/me', {
-      headers: {
-        'Cookie': `li_at=${li_at}`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/vnd.linkedin.normalized+json+2.1'
-      },
-      redirect: 'manual'
-    });
-    
-    // Extract JSESSIONID from Set-Cookie headers
-    const setCookies = res.headers.getSetCookie ? res.headers.getSetCookie() : 
-      (res.headers.get('set-cookie') || '').split(/,(?=\s*\w+=)/);
-    
-    for (const cookie of setCookies) {
-      const match = cookie.match(/JSESSIONID="?([^";]+)"?/);
-      if (match) {
-        console.log('[LinkedIn API] Got real JSESSIONID from LinkedIn');
-        return match[1].replace(/"/g, '');
-      }
-    }
-    
-    // If no JSESSIONID in response, try to extract csrf from response body
-    if (res.ok) {
-      // LinkedIn sometimes embeds csrf in response headers
-      const csrfHeader = res.headers.get('x-li-uuid') || '';
-      if (csrfHeader) {
-        console.log('[LinkedIn API] Using x-li-uuid as fallback csrf');
-      }
-    }
-    
-    // Fallback: generate ajax-style token (works for some endpoints)
-    const fallback = 'ajax:' + Math.random().toString(36).substring(2, 18);
-    console.log('[LinkedIn API] Using generated fallback CSRF token');
-    return fallback;
-  } catch (err) {
-    console.warn('[LinkedIn API] Failed to fetch JSESSIONID:', err.message);
-    return 'ajax:' + Math.random().toString(36).substring(2, 18);
-  }
-}
-
-/**
  * Validate a li_at cookie by fetching the user's own profile.
- * Returns { valid, profileName, profileUrl } or throws.
+ * Also extracts memberId needed for messaging API.
  */
 async function validateCookie(li_at) {
-  // First, get the real JSESSIONID from LinkedIn
-  const csrf = await fetchJsessionId(li_at);
+  const csrf = 'ajax:' + Math.random().toString(36).substring(2, 18);
   const headers = getHeaders(li_at, csrf);
 
   try {
@@ -81,19 +43,39 @@ async function validateCookie(li_at) {
     if (res.status === 401 || res.status === 403) {
       return { valid: false, error: 'Cookie expired or invalid. Please get a fresh li_at cookie.' };
     }
-
     if (!res.ok) {
       return { valid: false, error: `LinkedIn returned status ${res.status}` };
     }
 
     const data = await res.json();
-    const firstName = data.miniProfile?.firstName || data.firstName || '';
-    const lastName = data.miniProfile?.lastName || data.lastName || '';
-    const publicId = data.miniProfile?.publicIdentifier || data.publicIdentifier || '';
+    
+    let firstName = '', lastName = '', publicId = '', memberId = '';
+    
+    // Profile in included array (current format)
+    if (data.included && Array.isArray(data.included)) {
+      for (const item of data.included) {
+        if (item.firstName && item.lastName) {
+          firstName = item.firstName;
+          lastName = item.lastName;
+          publicId = item.publicIdentifier || '';
+          // Extract member ID from entityUrn like "urn:li:fs_miniProfile:ACoAAC..."
+          memberId = (item.entityUrn || '').split(':').pop();
+          break;
+        }
+      }
+    }
+    
+    // Fallback to direct fields
+    if (!firstName) {
+      firstName = data.miniProfile?.firstName || data.firstName || '';
+      lastName = data.miniProfile?.lastName || data.lastName || '';
+      publicId = data.miniProfile?.publicIdentifier || data.publicIdentifier || '';
+    }
 
     return {
       valid: true,
       csrf,
+      memberId,
       profileName: `${firstName} ${lastName}`.trim() || 'LinkedIn User',
       profileUrl: publicId ? `https://www.linkedin.com/in/${publicId}` : ''
     };
@@ -102,31 +84,27 @@ async function validateCookie(li_at) {
   }
 }
 
-/**
- * Save a validated cookie for a user.
- */
-function saveCookie(userId, li_at, csrf, profileName, profileUrl) {
+function saveCookie(userId, li_at, csrf, profileName, profileUrl, memberId) {
   db.prepare(`
     UPDATE users SET 
-      linkedin_cookie = ?, 
-      linkedin_csrf = ?,
+      linkedin_cookie = ?, linkedin_csrf = ?,
       linkedin_cookie_valid = 1,
-      linkedin_profile_name = ?,
-      linkedin_profile_url = ?,
+      linkedin_profile_name = ?, linkedin_profile_url = ?,
       linkedin_connected_at = datetime('now')
     WHERE id = ?
-  `).run(li_at, csrf, profileName, profileUrl, userId);
+  `).run(li_at, `${csrf}|${memberId}`, profileName, profileUrl, userId);
 }
 
-/**
- * Get stored cookie for a user.
- */
 function getCookie(userId) {
   const user = db.prepare('SELECT linkedin_cookie, linkedin_csrf, linkedin_cookie_valid, linkedin_profile_name, linkedin_profile_url, linkedin_connected_at FROM users WHERE id = ?').get(userId);
   if (!user || !user.linkedin_cookie) return null;
+  
+  // csrf field stores "csrf|memberId"
+  const parts = (user.linkedin_csrf || '').split('|');
   return {
     li_at: user.linkedin_cookie,
-    csrf: user.linkedin_csrf,
+    csrf: parts[0] || '',
+    memberId: parts[1] || '',
     valid: !!user.linkedin_cookie_valid,
     profileName: user.linkedin_profile_name,
     profileUrl: user.linkedin_profile_url,
@@ -134,25 +112,20 @@ function getCookie(userId) {
   };
 }
 
-/**
- * Disconnect - clear stored cookie.
- */
 function disconnectCookie(userId) {
   db.prepare(`
     UPDATE users SET 
-      linkedin_cookie = '', 
-      linkedin_csrf = '',
-      linkedin_cookie_valid = 0,
-      linkedin_profile_name = '',
-      linkedin_profile_url = '',
-      linkedin_connected_at = ''
+      linkedin_cookie = '', linkedin_csrf = '',
+      linkedin_cookie_valid = 0, linkedin_profile_name = '',
+      linkedin_profile_url = '', linkedin_connected_at = ''
     WHERE id = ?
   `).run(userId);
 }
 
 /**
- * Fetch conversations and messages from LinkedIn using stored cookie.
- * Returns { conversations: number, messages: number } count of synced items.
+ * Sync inbox — fetches latest conversations + messages.
+ * Uses Dash API for conversation list, old events API for messages.
+ * Limits to ~50 messages total per sync.
  */
 async function syncInbox(userId) {
   const cookie = getCookie(userId);
@@ -160,167 +133,184 @@ async function syncInbox(userId) {
     throw new Error('No valid LinkedIn cookie. Please connect your account first.');
   }
 
-  // Always fetch a fresh JSESSIONID before syncing
-  console.log('[LinkedIn API] Refreshing JSESSIONID for sync...');
-  const freshCsrf = await fetchJsessionId(cookie.li_at);
-  
-  // Update stored csrf if different
-  if (freshCsrf !== cookie.csrf) {
-    db.prepare('UPDATE users SET linkedin_csrf = ? WHERE id = ?').run(freshCsrf, userId);
-    cookie.csrf = freshCsrf;
+  if (!cookie.memberId) {
+    throw new Error('Missing LinkedIn member ID. Please disconnect and reconnect.');
   }
-  
+
   const headers = getHeaders(cookie.li_at, cookie.csrf);
+  const profileUrn = `urn:li:fsd_profile:${cookie.memberId}`;
 
-  // Fetch conversations
-  let convData;
+  // Step 1: Fetch conversations via Dash API
+  console.log(`[LinkedIn API] Fetching conversations for ${cookie.profileName}...`);
+  
+  const convUrl = `${VOYAGER_BASE}/voyagerMessagingDashMessengerConversations?q=syncToken&mailboxUrn=${encodeURIComponent(profileUrn)}&count=20`;
+  
+  let convRes;
   try {
-    const res = await fetch(`${VOYAGER_BASE}/messaging/conversations?keyVersion=LEGACY_INBOX`, { headers });
-    if (res.status === 401 || res.status === 403) {
-      // Mark cookie as invalid
-      db.prepare('UPDATE users SET linkedin_cookie_valid = 0 WHERE id = ?').run(userId);
-      throw new Error('LinkedIn session expired. Please reconnect with a fresh cookie.');
-    }
-    if (!res.ok) {
-      // Try alternate endpoint
-      const altRes = await fetch(`${VOYAGER_BASE}/messaging/conversations`, { headers });
-      if (!altRes.ok) throw new Error(`LinkedIn API error: ${altRes.status}`);
-      convData = await altRes.json();
-    } else {
-      convData = await res.json();
-    }
+    convRes = await fetch(convUrl, { headers });
   } catch (err) {
-    if (err.message.includes('session expired') || err.message.includes('reconnect')) throw err;
-    throw new Error(`Failed to fetch conversations: ${err.message}`);
+    throw new Error(`Failed to connect to LinkedIn: ${err.message}`);
   }
 
-  const conversations = convData.elements || [];
+  if (convRes.status === 401 || convRes.status === 403) {
+    db.prepare('UPDATE users SET linkedin_cookie_valid = 0 WHERE id = ?').run(userId);
+    throw new Error('LinkedIn session expired. Please reconnect with a fresh cookie.');
+  }
+
+  if (!convRes.ok) {
+    throw new Error(`LinkedIn API error: ${convRes.status}`);
+  }
+
+  const convData = await convRes.json();
   const included = convData.included || [];
+  
+  // Extract conversations from included array
+  const conversations = included.filter(i => 
+    i.$type === 'com.linkedin.messenger.Conversation'
+  );
+
+  console.log(`[LinkedIn API] Found ${conversations.length} conversations`);
+
   let totalMessages = 0;
   let totalConversations = 0;
+  const MAX_MESSAGES = 50;
 
-  console.log(`[LinkedIn API] Found ${conversations.length} conversations, ${included.length} included entities`);
+  // Step 2: For each conversation, fetch events (messages) via old API
+  for (const conv of conversations) {
+    if (totalMessages >= MAX_MESSAGES) break;
 
-  for (const conv of conversations.slice(0, 20)) {
-    const convUrn = conv.entityUrn || conv['*conversation'] || '';
-    const convId = convUrn.split(':').pop();
-    if (!convId) continue;
+    const convBackendUrn = conv.backendUrn || '';
+    // Thread ID is the part after "urn:li:messagingThread:"
+    const threadId = convBackendUrn.replace('urn:li:messagingThread:', '');
+    if (!threadId) continue;
 
-    // Extract participant info
+    // Fetch events (messages) for this conversation
+    let events = [];
+    let eventProfiles = {};
+    try {
+      const eventsUrl = `${VOYAGER_BASE}/messaging/conversations/${encodeURIComponent(threadId)}/events?count=10`;
+      const eventsRes = await fetch(eventsUrl, { headers });
+      
+      if (eventsRes.ok) {
+        const eventsData = await eventsRes.json();
+        const evIncluded = eventsData.included || [];
+        
+        events = evIncluded.filter(i => 
+          i.$type === 'com.linkedin.voyager.messaging.Event'
+        );
+        
+        // Extract profiles from this response
+        for (const item of evIncluded) {
+          if (item.$type === 'com.linkedin.voyager.identity.shared.MiniProfile' ||
+              (item.firstName && item.lastName && item.entityUrn)) {
+            const id = (item.entityUrn || '').split(':').pop();
+            if (id) {
+              eventProfiles[id] = {
+                firstName: item.firstName || '',
+                lastName: item.lastName || '',
+                publicIdentifier: item.publicIdentifier || '',
+              };
+            }
+          }
+        }
+      }
+      
+      // Rate limit: small delay between API calls
+      await new Promise(r => setTimeout(r, 200));
+    } catch (e) {
+      console.warn(`[LinkedIn API] Failed to fetch events for ${threadId}: ${e.message}`);
+      continue;
+    }
+
+    // Find participant (not self) from event profiles
     let participantName = '';
     let participantUrl = '';
-    const participants = conv.participants || [];
-
-    for (const p of participants) {
-      const memberUrn = typeof p === 'string' ? p :
-        p['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile?.entityUrn ||
-        p.miniProfile?.entityUrn || p['*miniProfile'] || p.entityUrn || '';
-      const profileId = memberUrn.split(':').pop();
-
-      const profile = included.find(i =>
-        (i.$type === 'com.linkedin.voyager.identity.shared.MiniProfile' ||
-         i.$type === 'com.linkedin.voyager.messaging.MessagingMember' ||
-         i.firstName) &&
-        (i.publicIdentifier === profileId ||
-         i.entityUrn?.includes(profileId) ||
-         i['*miniProfile']?.includes(profileId))
-      );
-
-      if (profile && profile.firstName) {
-        participantName = `${profile.firstName} ${profile.lastName || ''}`.trim();
-        participantUrl = `https://www.linkedin.com/in/${profile.publicIdentifier || profileId}`;
+    
+    for (const [id, profile] of Object.entries(eventProfiles)) {
+      if (id !== cookie.memberId) {
+        participantName = `${profile.firstName} ${profile.lastName}`.trim();
+        participantUrl = profile.publicIdentifier ? `https://www.linkedin.com/in/${profile.publicIdentifier}` : '';
         break;
       }
     }
 
-    // Fallback participant name
-    if (!participantName && included.length > 0) {
-      const convMember = included.find(i =>
-        i.$type?.includes('MessagingMember') && i.entityUrn?.includes(convId)
-      );
-      if (convMember) {
-        const mp = included.find(i =>
-          i.$type?.includes('MiniProfile') &&
-          convMember['*miniProfile']?.includes(i.entityUrn?.split(':').pop())
-        );
-        if (mp) {
-          participantName = `${mp.firstName} ${mp.lastName || ''}`.trim();
-          participantUrl = `https://www.linkedin.com/in/${mp.publicIdentifier}`;
-        }
+    // Fallback: try creatorUrn from conversation
+    if (!participantName && conv.creatorUrn) {
+      // creatorUrn format: "urn:li:msg_messagingParticipant:urn:li:fsd_profile:XXX"
+      const creatorParts = conv.creatorUrn.split(':');
+      const creatorId = creatorParts[creatorParts.length - 1];
+      if (creatorId && creatorId !== cookie.memberId) {
+        participantName = creatorId.substring(0, 8) + '...'; // short ID as fallback
       }
     }
 
-    if (!participantName) participantName = 'Unknown';
+    if (!participantName) participantName = 'LinkedIn User';
 
-    // Fetch messages for this conversation
-    try {
-      const msgRes = await fetch(`${VOYAGER_BASE}/messaging/conversations/${convId}/events?count=10`, { headers });
-      if (!msgRes.ok) continue;
-
-      const msgData = await msgRes.json();
-      const events = msgData.elements || [];
-
-      // Upsert conversation
-      let dbConv = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND participantUrl = ?').get(userId, participantUrl);
-      if (!dbConv) {
-        const cId = uuidv4();
-        db.prepare('INSERT INTO conversations (id, user_id, participantName, participantUrl, lastMessage, lastMessageAt, unreadCount) VALUES (?, ?, ?, ?, ?, datetime(\'now\'), 0)')
-          .run(cId, userId, participantName, participantUrl, '');
-        dbConv = { id: cId };
-        totalConversations++;
-      } else {
+    // Upsert conversation in DB (use threadId as unique identifier)
+    let dbConv = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND participantUrl = ?').get(userId, participantUrl || `linkedin:${threadId}`);
+    if (!dbConv && participantName !== 'LinkedIn User') {
+      dbConv = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND participantName = ?').get(userId, participantName);
+    }
+    if (!dbConv) {
+      const cId = uuidv4();
+      const pUrl = participantUrl || `linkedin:${threadId}`;
+      db.prepare("INSERT INTO conversations (id, user_id, participantName, participantUrl, lastMessage, lastMessageAt, unreadCount) VALUES (?, ?, ?, ?, '', datetime('now'), 0)")
+        .run(cId, userId, participantName, pUrl);
+      dbConv = { id: cId };
+      totalConversations++;
+    } else {
+      if (participantName !== 'LinkedIn User') {
         db.prepare('UPDATE conversations SET participantName = ? WHERE id = ?').run(participantName, dbConv.id);
       }
-
-      let lastMsg = '';
-      let lastMsgAt = null;
-      let unread = 0;
-
-      for (const evt of events) {
-        const body = evt.eventContent?.['com.linkedin.voyager.messaging.event.MessageEvent'];
-        if (!body) continue;
-
-        const content = body.body || body.attributedBody?.text || '';
-        const linkedinMsgId = evt.entityUrn || `${convId}_${evt.createdAt}`;
-        const timestamp = evt.createdAt ? new Date(evt.createdAt).toISOString() : new Date().toISOString();
-
-        // Determine direction
-        const senderUrn = evt.from?.['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile?.entityUrn ||
-          evt.from?.miniProfile?.entityUrn || evt.from?.entityUrn || '';
-        const myUrn = conv.hostUrn || conv['*hostProfile'] || '';
-        const isFromMe = myUrn && senderUrn.includes(myUrn.split(':').pop());
-        const direction = isFromMe ? 'outbound' : 'inbound';
-
-        // Check if message already exists (dedup)
-        const existing = db.prepare('SELECT id FROM messages WHERE linkedinMessageId = ? AND conversation_id = ?').get(linkedinMsgId, dbConv.id);
-        if (!existing) {
-          const msgId = uuidv4();
-          db.prepare('INSERT INTO messages (id, conversation_id, user_id, direction, content, senderName, linkedinMessageId, isRead, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)')
-            .run(msgId, dbConv.id, userId, direction, content, direction === 'inbound' ? participantName : cookie.profileName, linkedinMsgId, timestamp);
-          totalMessages++;
-          if (direction === 'inbound') unread++;
-        }
-
-        if (!lastMsgAt || new Date(timestamp) > new Date(lastMsgAt)) {
-          lastMsg = content;
-          lastMsgAt = timestamp;
-        }
-      }
-
-      // Update conversation metadata
-      if (lastMsg) {
-        db.prepare('UPDATE conversations SET lastMessage = ?, lastMessageAt = ?, unreadCount = unreadCount + ? WHERE id = ?')
-          .run(lastMsg.substring(0, 200), lastMsgAt, unread, dbConv.id);
-      }
-    } catch (e) {
-      console.warn(`[LinkedIn API] Failed to fetch messages for conv ${convId}:`, e.message);
     }
 
-    // Rate limiting
-    await new Promise(r => setTimeout(r, 300));
+    // Process events as messages
+    let lastMsg = '';
+    let lastMsgAt = null;
+    let unread = 0;
+
+    for (const event of events) {
+      if (totalMessages >= MAX_MESSAGES) break;
+
+      // Extract message body from event
+      const eventContent = event.eventContent || {};
+      const msgBody = eventContent.body || eventContent.attributedBody?.text || event.body || '';
+      const content = typeof msgBody === 'object' ? (msgBody.text || JSON.stringify(msgBody)) : msgBody;
+      if (!content) continue;
+
+      const linkedinMsgId = event.entityUrn || event.backendUrn || `${threadId}_${event.createdAt || Date.now()}`;
+      const timestamp = event.createdAt ? new Date(event.createdAt).toISOString() : new Date().toISOString();
+
+      // Determine direction from sender
+      const fromUrn = event.from?.['com.linkedin.voyager.messaging.MessagingMember']?.entityUrn ||
+                      event.from?.entityUrn || event.from || '';
+      const fromId = typeof fromUrn === 'string' ? fromUrn.split(':').pop() : '';
+      const isFromMe = fromId.includes(cookie.memberId);
+      const direction = isFromMe ? 'outbound' : 'inbound';
+
+      // Dedup
+      const existing = db.prepare('SELECT id FROM messages WHERE linkedinMessageId = ? AND conversation_id = ?').get(linkedinMsgId, dbConv.id);
+      if (!existing) {
+        const msgId = uuidv4();
+        db.prepare('INSERT INTO messages (id, conversation_id, user_id, direction, content, senderName, linkedinMessageId, isRead, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)')
+          .run(msgId, dbConv.id, userId, direction, content, direction === 'inbound' ? participantName : cookie.profileName, linkedinMsgId, timestamp);
+        totalMessages++;
+        if (direction === 'inbound') unread++;
+      }
+
+      if (!lastMsgAt || new Date(timestamp) > new Date(lastMsgAt)) {
+        lastMsg = content;
+        lastMsgAt = timestamp;
+      }
+    }
+
+    // Update conversation metadata
+    const displayTime = lastMsgAt || (conv.lastActivityAt ? new Date(conv.lastActivityAt).toISOString() : new Date().toISOString());
+    db.prepare('UPDATE conversations SET lastMessage = ?, lastMessageAt = ?, unreadCount = ? WHERE id = ?')
+      .run((lastMsg || '').substring(0, 200), displayTime, conv.unreadCount || unread, dbConv.id);
   }
 
-  console.log(`[LinkedIn API] Synced ${totalMessages} messages across ${totalConversations} new conversations`);
+  console.log(`[LinkedIn API] Synced ${totalMessages} messages across ${totalConversations} new conversations (limit: ${MAX_MESSAGES})`);
   return { conversations: totalConversations, messages: totalMessages };
 }
 
