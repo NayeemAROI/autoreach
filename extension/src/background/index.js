@@ -185,8 +185,7 @@ async function handleInboxSync() {
       'Accept': 'application/vnd.linkedin.normalized+json+2.1',
       'x-li-lang': 'en_US',
       'x-restli-protocol-version': '2.0.0',
-      'csrf-token': session.JSESSIONID,
-      'Cookie': `li_at=${session.li_at}; JSESSIONID="${session.JSESSIONID}"`
+      'csrf-token': session.JSESSIONID
     };
 
     // Fetch recent conversations

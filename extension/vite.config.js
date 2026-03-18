@@ -5,6 +5,14 @@ import tailwindcss from '@tailwindcss/vite'
 import manifest from './manifest.json'
 
 export default defineConfig({
+  server: {
+    port: 5173,
+    strictPort: true,
+    cors: true,
+    hmr: {
+      clientPort: 5173
+    }
+  },
   plugins: [
     preact(),
     tailwindcss(),
