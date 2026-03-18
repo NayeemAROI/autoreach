@@ -261,6 +261,20 @@ db.exec(`
   );
 `);
 
+// Create lead_notes table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS lead_notes (
+    id TEXT PRIMARY KEY,
+    lead_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    createdAt TEXT DEFAULT (datetime('now')),
+    updatedAt TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
+
 // Create Default UI User if no users exist
 const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
 let defaultUserId = '';

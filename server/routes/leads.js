@@ -9,7 +9,7 @@ router.use(auth);
 
 // GET all leads with optional filters
 router.get('/', (req, res) => {
-  const { search, status, verification_status, tag, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+  const { search, status, verification_status, tag, campaign, dateFrom, dateTo, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
   const userId = req.user.id;
   
   let query = `
@@ -49,6 +49,20 @@ router.get('/', (req, res) => {
     params.push(`%${tag}%`);
   }
 
+  if (campaign && campaign !== 'all') {
+    query += ' AND cl.campaign_id = ?';
+    params.push(campaign);
+  }
+
+  if (dateFrom) {
+    query += ' AND l.createdAt >= ?';
+    params.push(dateFrom);
+  }
+  if (dateTo) {
+    query += ' AND l.createdAt <= ?';
+    params.push(dateTo);
+  }
+
   const validSortColumns = ['createdAt', 'firstName', 'company', 'status'];
   const col = validSortColumns.includes(sortBy) ? `l.${sortBy}` : 'l.createdAt';
   const order = sortOrder === 'asc' ? 'ASC' : 'DESC';
@@ -64,6 +78,20 @@ router.get('/', (req, res) => {
   }
 });
 
+// GET all unique tags for this user (must be before /:id)
+router.get('/meta/tags', (req, res) => {
+  try {
+    const leads = db.prepare('SELECT tags FROM leads WHERE user_id = ?').all(req.user.id);
+    const tagSet = new Set();
+    leads.forEach(l => {
+      try { JSON.parse(l.tags || '[]').forEach(t => tagSet.add(t)); } catch {}
+    });
+    res.json({ tags: [...tagSet].sort() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET single lead
 router.get('/:id', (req, res) => {
   try {
@@ -74,7 +102,10 @@ router.get('/:id', (req, res) => {
     // Get activities for this lead
     const activities = db.prepare('SELECT * FROM activities WHERE leadId = ? AND user_id = ? ORDER BY timestamp DESC LIMIT 20').all(req.params.id, req.user.id);
     
-    res.json({ lead, activities });
+    // Get notes
+    const notes = db.prepare('SELECT n.*, u.name as authorName FROM lead_notes n LEFT JOIN users u ON n.user_id = u.id WHERE n.lead_id = ? ORDER BY n.createdAt DESC').all(req.params.id);
+
+    res.json({ lead, activities, notes });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -279,3 +310,84 @@ router.post('/:id/verify', (req, res) => {
 });
 
 module.exports = router;
+
+// ─── Notes CRUD ───
+
+// GET notes for a lead
+router.get('/:id/notes', (req, res) => {
+  try {
+    const notes = db.prepare(`
+      SELECT n.*, u.name as authorName 
+      FROM lead_notes n 
+      LEFT JOIN users u ON n.user_id = u.id 
+      WHERE n.lead_id = ? 
+      ORDER BY n.createdAt DESC
+    `).all(req.params.id);
+    res.json({ notes });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST add note to lead
+router.post('/:id/notes', (req, res) => {
+  const { content } = req.body;
+  if (!content?.trim()) return res.status(400).json({ error: 'Note content required' });
+
+  try {
+    const id = uuidv4();
+    db.prepare('INSERT INTO lead_notes (id, lead_id, user_id, content) VALUES (?, ?, ?, ?)').run(id, req.params.id, req.user.id, content.trim());
+    const note = db.prepare('SELECT n.*, u.name as authorName FROM lead_notes n LEFT JOIN users u ON n.user_id = u.id WHERE n.id = ?').get(id);
+    res.status(201).json(note);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE note
+router.delete('/:leadId/notes/:noteId', (req, res) => {
+  try {
+    db.prepare('DELETE FROM lead_notes WHERE id = ? AND (user_id = ? OR ? IN (SELECT id FROM users WHERE role = "owner"))').run(req.params.noteId, req.user.id, req.user.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Tag Management ───
+
+// POST add tag to lead
+router.post('/:id/tags', (req, res) => {
+  const { tag } = req.body;
+  if (!tag?.trim()) return res.status(400).json({ error: 'Tag required' });
+
+  try {
+    const lead = db.prepare('SELECT tags FROM leads WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    
+    const tags = JSON.parse(lead.tags || '[]');
+    const newTag = tag.trim().toLowerCase();
+    if (!tags.includes(newTag)) {
+      tags.push(newTag);
+      db.prepare('UPDATE leads SET tags = ? WHERE id = ?').run(JSON.stringify(tags), req.params.id);
+    }
+    res.json({ tags });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE tag from lead
+router.delete('/:id/tags/:tag', (req, res) => {
+  try {
+    const lead = db.prepare('SELECT tags FROM leads WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    let tags = JSON.parse(lead.tags || '[]');
+    tags = tags.filter(t => t !== req.params.tag);
+    db.prepare('UPDATE leads SET tags = ? WHERE id = ?').run(JSON.stringify(tags), req.params.id);
+    res.json({ tags });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
