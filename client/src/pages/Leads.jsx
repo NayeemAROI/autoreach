@@ -596,7 +596,7 @@ export default function Leads() {
       </div>
 
       {/* Table */}
-      <div className="glass-card overflow-hidden relative z-10">
+      <div className="glass-card overflow-visible relative z-10">
         <div className="table-container border-0 rounded-none bg-transparent overflow-x-auto">
           <table className="w-full">
             <thead className="bg-bg-elevated/50">
