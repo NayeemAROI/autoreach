@@ -250,4 +250,42 @@ router.get('/campaign-breakdown', (req, res) => {
   }
 });
 
+// GET /api/stats/risk - safety risk assessment
+router.get('/risk', (req, res) => {
+  try {
+    const { assessRisk } = require('../middleware/safety');
+    const risk = assessRisk(req.user.id);
+    res.json(risk);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/stats/conversion-rate - conversion funnel
+router.get('/conversion-rate', (req, res) => {
+  const userId = getEffectiveUserId(req);
+  try {
+    const total = db.prepare('SELECT COUNT(*) as c FROM leads WHERE user_id = ?').get(userId)?.c || 0;
+    const contacted = db.prepare("SELECT COUNT(*) as c FROM campaign_leads WHERE user_id = ? AND status IN ('active','completed')").get(userId)?.c || 0;
+    const replied = db.prepare("SELECT COUNT(*) as c FROM campaign_leads WHERE user_id = ? AND status = 'replied'").get(userId)?.c || 0;
+    const converted = db.prepare("SELECT COUNT(*) as c FROM campaign_leads WHERE user_id = ? AND status = 'completed'").get(userId)?.c || 0;
+
+    res.json({
+      funnel: [
+        { stage: 'Total Leads', count: total },
+        { stage: 'Contacted', count: contacted },
+        { stage: 'Replied', count: replied },
+        { stage: 'Converted', count: converted },
+      ],
+      rates: {
+        contactRate: total > 0 ? ((contacted / total) * 100).toFixed(1) : '0.0',
+        replyRate: contacted > 0 ? ((replied / contacted) * 100).toFixed(1) : '0.0',
+        conversionRate: total > 0 ? ((converted / total) * 100).toFixed(1) : '0.0',
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

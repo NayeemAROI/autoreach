@@ -21,5 +21,18 @@ services:
       - server
     restart: unless-stopped
 
+  worker:
+    build: ./server
+    command: ["node", "worker.js"]
+    env_file:
+      - ./server/.env
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - server-data:/app/db
+    depends_on:
+      - server
+    restart: unless-stopped
+
 volumes:
   server-data:
