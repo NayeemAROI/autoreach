@@ -28,6 +28,13 @@ export default function InboxPage() {
     setSyncing(true)
     try {
       const res = await apiFetch('/api/inbox/trigger-sync', { method: 'POST' })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        console.warn('Sync failed:', errData.error || res.statusText)
+        // Don't crash — just stop syncing
+        setSyncing(false)
+        return
+      }
       const data = await res.json()
       // Wait a few seconds for messages to come in, then reload
       setTimeout(() => {
