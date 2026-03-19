@@ -1,8 +1,27 @@
 const db = require('../db/database');
-const { getClients } = require('./linkedinBridge');
+const bridge = require('./linkedinBridge');
 const jobQueue = require('./jobQueue');
 const logger = require('../utils/logger');
 const { v4: uuidv4 } = require('uuid');
+
+// ─── Action Completion Tracking ───
+// Listen for extension reporting action results
+bridge.on('action_completed', ({ action, userId, leadId, campaignId }) => {
+  logger.info(`✅ Extension confirmed action: ${action}`, { leadId, campaignId });
+  if (leadId && campaignId) {
+    db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(uuidv4(), userId, leadId, campaignId, `${action}_completed`, `Extension confirmed ${action} success`);
+  }
+});
+
+bridge.on('action_failed', ({ action, userId, leadId, campaignId, error }) => {
+  logger.error(`❌ Extension action failed: ${action}`, { leadId, campaignId, error });
+  if (leadId && campaignId) {
+    db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(uuidv4(), userId, leadId, campaignId, `${action}_failed`, `Extension error: ${error || 'unknown'}`);
+    markLeadError({ campaign_id: campaignId, lead_id: leadId }, `Action ${action} failed: ${error || 'unknown'}`);
+  }
+});
 
 // ─── Randomized delay helper ───
 function randomDelay(minMs, maxMs) {
@@ -56,33 +75,62 @@ jobQueue.register('process_lead', async (payload, job) => {
 jobQueue.register('linkedin_action', async (payload) => {
   const { userId, leadId, campaignId, actionType, config } = payload;
 
-  const clients = getClients(userId);
-  if (!clients || clients.length === 0) {
+  const bridge = require('./linkedinBridge');
+  if (!bridge.isConnected(userId)) {
     throw new Error('No active extension connected'); // Will trigger retry
   }
 
-  const lead = db.prepare('SELECT linkedinUrl FROM leads WHERE id = ?').get(leadId);
+  const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
   if (!lead?.linkedinUrl) {
     markLeadError({ campaign_id: campaignId, lead_id: leadId }, 'Missing LinkedIn URL');
     return;
   }
 
-  const ws = clients[0];
-  ws.send(JSON.stringify({
-    type: 'DISPATCH_ACTION',
-    payload: {
-      action: actionType,
-      profileUrl: lead.linkedinUrl,
-      message: config?.message || '',
-      withNote: config?.withNote || false,
-      note: config?.note || ''
-    }
-  }));
+  // Variable substitution for personalized messages/notes
+  function personalize(text) {
+    if (!text) return '';
+    return text
+      .replace(/\{firstName\}/gi, lead.firstName || '')
+      .replace(/\{lastName\}/gi, lead.lastName || '')
+      .replace(/\{company\}/gi, lead.company || '')
+      .replace(/\{title\}/gi, lead.title || '')
+      .replace(/\{fullName\}/gi, `${lead.firstName || ''} ${lead.lastName || ''}`.trim());
+  }
+
+  // Map engine action types to extension command types
+  const ACTION_MAP = {
+    'send_invite':     'SEND_CONNECTION',
+    'view_profile':    'FIND_LEAD',
+    'send_message':    'SEND_MESSAGE',
+    'like_post':       'LIKE_POST',
+    'endorse':         'ENDORSE',
+    'comment':         'COMMENT',
+    'withdraw_invite': 'WITHDRAW_INVITE',
+    // Linear sequence aliases
+    'connect':         'SEND_CONNECTION',
+    'message':         'SEND_MESSAGE',
+    'view':            'FIND_LEAD'
+  };
+
+  const commandType = ACTION_MAP[actionType] || actionType.toUpperCase();
+  const message = personalize(config?.message || config?.note || '');
+
+  const sent = bridge.sendCommand(userId, commandType, {
+    url: lead.linkedinUrl,
+    profileUrl: lead.linkedinUrl,
+    message,
+    leadId,
+    campaignId
+  });
+
+  if (!sent) {
+    throw new Error('Failed to send command to extension');
+  }
 
   db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(uuidv4(), userId, leadId, campaignId, actionType, `Dispatched ${actionType} to extension`);
+    .run(uuidv4(), userId, leadId, campaignId, actionType, `Dispatched ${commandType} to extension`);
 
-  logger.info(`⚡ Action dispatched: ${actionType}`, { leadId, campaignId });
+  logger.info(`⚡ Action dispatched: ${actionType} → ${commandType}`, { leadId, campaignId });
 });
 
 // ─── Tree-based Processing ───

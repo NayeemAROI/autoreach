@@ -7,7 +7,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'scrapeProfile') {
     scrapeProfileData();
   } else if (request.action === 'connect') {
-    sendConnection(request.message);
+    sendConnection(request.message, request.leadId, request.campaignId);
   } else if (request.action === 'message') {
     sendMessage(request.message);
   }
@@ -196,7 +196,7 @@ async function scrapeProfileData() {
 }
 
 // Auto-Connect Logic
-async function sendConnection(noteText) {
+async function sendConnection(noteText, leadId, campaignId) {
   try {
     await waitForElement('main.scaffold-layout__main');
     await humanScroll();
@@ -222,29 +222,50 @@ async function sendConnection(noteText) {
     connectBtn.click();
     await delay(1000, 2500);
 
-    const addNoteBtn = await waitForElement('button[aria-label="Add a note"]');
-    if (!addNoteBtn) throw new Error('Add note button not found in modal');
+    // Wait for the connection modal to appear
+    const modal = await waitForElement('[role="dialog"], .send-invite, .artdeco-modal', 5000);
+    if (!modal) throw new Error('Connection modal did not appear');
 
     if (noteText) {
-      addNoteBtn.click();
-      await delay(800, 1500);
+      // Click "Add a note" button
+      const addNoteBtn = Array.from(document.querySelectorAll('button')).find(btn => 
+        btn.innerText.includes('Add a note') || btn.getAttribute('aria-label')?.includes('Add a note')
+      );
       
-      const textArea = document.querySelector('textarea[name="message"]');
-      if (textArea) {
-        textArea.value = noteText;
-        textArea.dispatchEvent(new Event('input', { bubbles: true }));
-        await delay(1500, 3000);
+      if (addNoteBtn) {
+        addNoteBtn.click();
+        await delay(800, 1500);
+        
+        // Find and fill the textarea
+        const textArea = document.querySelector('textarea[name="message"]') 
+          || document.querySelector('textarea#custom-message')
+          || document.querySelector('.send-invite textarea');
+        
+        if (textArea) {
+          // Simulate human-like typing by setting value and dispatching React-compatible events
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+          nativeInputValueSetter.call(textArea, noteText);
+          textArea.dispatchEvent(new Event('input', { bubbles: true }));
+          textArea.dispatchEvent(new Event('change', { bubbles: true }));
+          await delay(1500, 3000);
+        }
       }
     }
 
-    const sendBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('Send'));
-    if (sendBtn && !sendBtn.disabled) {
-      // sendBtn.click(); // COMMENTED OUT FOR SAFETY DURING DEVELOPMENT
-      console.log('Would have clicked Send connection req here');
+    // Find and click the Send button
+    const sendBtn = Array.from(document.querySelectorAll('button')).find(btn => {
+      const text = btn.innerText.trim();
+      return (text === 'Send' || text === 'Send without a note') && !btn.disabled;
+    });
+
+    if (sendBtn) {
+      sendBtn.click();
+      console.log('[Automation Bridge] Connection request sent!');
+      await delay(500, 1000);
       
       chrome.runtime.sendMessage({ 
         type: 'ACTION_COMPLETED', 
-        payload: { action: 'connect', status: 'success' } 
+        payload: { action: 'connect', status: 'success', leadId, campaignId } 
       });
     } else {
       throw new Error('Send button not active or found');
@@ -254,7 +275,7 @@ async function sendConnection(noteText) {
     console.error('LinkedIn Automation Failed:', err);
     chrome.runtime.sendMessage({ 
       type: 'ACTION_FAILED', 
-      payload: { action: 'connect', error: err.message } 
+      payload: { action: 'connect', error: err.message, leadId, campaignId } 
     });
   }
 }

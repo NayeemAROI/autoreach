@@ -201,30 +201,35 @@ chrome.cookies.onChanged.addListener((changeInfo) => {
 // 3. Command Router (Backend -> Extension)
 async function handleCommand(command) {
   console.log('[Automation Bridge] Received command:', command);
+  const p = command.payload || {};
   
   if (command.type === 'FIND_LEAD') {
-    // Tell content script to scrape a profile
-    sendMessageToContentScript(command.payload.url, { action: 'scrapeProfile' });
+    sendMessageToContentScript(p.url, { 
+      action: 'scrapeProfile',
+      leadId: p.leadId,
+      campaignId: p.campaignId
+    });
   } 
   else if (command.type === 'SEND_CONNECTION') {
-    // Send connection via content script
-    sendMessageToContentScript(command.payload.url, { 
+    sendMessageToContentScript(p.url || p.profileUrl, { 
       action: 'connect', 
-      message: command.payload.message 
+      message: p.message || '',
+      leadId: p.leadId,
+      campaignId: p.campaignId
     });
   }
   else if (command.type === 'SILENT_VERIFY') {
-    handleSilentVerify(command.payload.url, command.payload.leadId);
+    handleSilentVerify(p.url, p.leadId);
   }
   else if (command.type === 'SEND_MESSAGE') {
-    // Open messaging page and send message via content script
-    sendMessageToContentScript(command.payload.profileUrl, {
+    sendMessageToContentScript(p.profileUrl || p.url, {
       action: 'sendMessage',
-      message: command.payload.message
+      message: p.message || '',
+      leadId: p.leadId,
+      campaignId: p.campaignId
     });
   }
   else if (command.type === 'SYNC_INBOX') {
-    // Scrape LinkedIn inbox using Voyager API
     handleInboxSync();
   }
 }
