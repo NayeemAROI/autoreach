@@ -48,6 +48,22 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
       return res.status(400).json({ error: result.error || 'Cookie validation failed.' });
     }
 
+    // Prevent same LinkedIn profile from being connected to multiple workspaces
+    if (result.memberId) {
+      const db = require('../db/database');
+      const wsId = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(req.user.id)?.activeWorkspaceId || '';
+      const existing = db.prepare(`
+        SELECT w.id, w.name FROM workspaces w
+        WHERE w.linkedin_member_id = ? AND w.id != ? AND w.linkedin_cookie_valid = 1
+      `).get(result.memberId, wsId);
+      
+      if (existing) {
+        return res.status(409).json({ 
+          error: `This LinkedIn profile (${result.profileName}) is already connected to workspace "${existing.name}". Disconnect it there first.` 
+        });
+      }
+    }
+
     // Save to DB (including memberId needed for messaging API)
     linkedinApi.saveCookie(req.user.id, trimmed, result.csrf, result.profileName, result.profileUrl, result.memberId);
     console.log(`[Integrations] LinkedIn connected for ${result.profileName}`);
@@ -89,7 +105,8 @@ router.post('/sync-inbox', authenticate, async (req, res) => {
     });
   } catch (err) {
     console.error('[Integrations] Sync error:', err.message);
-    const status = err.message.includes('expired') || err.message.includes('reconnect') ? 401 : 500;
+    // Use 502 (not 401!) for LinkedIn session issues — 401 triggers frontend logout
+    const status = err.message.includes('expired') || err.message.includes('reconnect') ? 502 : 500;
     res.status(status).json({ error: err.message });
   }
 });
