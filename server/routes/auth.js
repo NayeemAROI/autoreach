@@ -254,6 +254,35 @@ router.post('/verify-email', (req, res) => {
     res.status(500).json({ error: 'Internal server error during verification.' });
   }
 });
+
+// POST /api/auth/resend-code
+router.post('/resend-code', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const user = db.prepare('SELECT id FROM users WHERE email = ? AND is_verified = 0').get(email.toLowerCase());
+    if (!user) return res.json({ message: 'If the account exists, a new code has been sent.' });
+
+    // Delete old verification codes
+    db.prepare('DELETE FROM email_verifications WHERE user_id = ? AND token NOT LIKE ?').run(user.id, 'reset_%');
+
+    // Generate new code
+    const newCode = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    db.prepare('INSERT INTO email_verifications (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)')
+      .run(uuidv4(), user.id, newCode, expiresAt);
+
+    // Send email
+    sendVerificationEmail(email.toLowerCase(), newCode).catch(err => console.error('Resend email error:', err));
+
+    res.json({ message: 'A new verification code has been sent.' });
+  } catch (error) {
+    console.error('Resend code error:', error);
+    res.status(500).json({ error: 'Failed to resend code' });
+  }
+});
+
 // POST /api/auth/forgot-password
 router.post('/forgot-password', async (req, res) => {
   try {

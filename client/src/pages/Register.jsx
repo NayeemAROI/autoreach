@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Zap, Mail, Lock, User, ArrowRight, Loader2, CheckCircle2, Shield, Star, Rocket } from 'lucide-react';
+import { Zap, Mail, Lock, User, ArrowRight, Loader2, CheckCircle2, Shield, Star, Rocket, RefreshCw } from 'lucide-react';
 
 export default function Register() {
   const [name, setName] = useState('');
@@ -12,6 +12,9 @@ export default function Register() {
   
   const [step, setStep] = useState(1);
   const [code, setCode] = useState('');
+  const [timer, setTimer] = useState(0);
+  const [resending, setResending] = useState(false);
+  const timerRef = useRef(null);
   
   const { register } = useAuth();
   const navigate = useNavigate();
@@ -50,6 +53,7 @@ export default function Register() {
       }
 
       setStep(2); // Move to verification step
+      setTimer(60); // Start 60-sec countdown
     } catch (err) {
       setError(err.message);
     } finally {
@@ -86,6 +90,32 @@ export default function Register() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Countdown timer
+  useEffect(() => {
+    if (timer > 0) {
+      timerRef.current = setTimeout(() => setTimer(t => t - 1), 1000);
+      return () => clearTimeout(timerRef.current);
+    }
+  }, [timer]);
+
+  const handleResend = async () => {
+    setResending(true);
+    setError('');
+    try {
+      const res = await fetch('/api/auth/resend-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) throw new Error('Failed to resend');
+      setTimer(60); // Restart countdown
+    } catch (err) {
+      setError('Failed to resend code. Please try again.');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -333,8 +363,29 @@ export default function Register() {
                   </button>
                 </form>
 
-                <div className="mt-8 pt-6 border-t border-border/50 text-center">
-                  <button onClick={() => setStep(1)} className="text-sm text-text-secondary hover:text-text-primary transition-colors inline-flex items-center gap-2 font-medium">
+                <div className="mt-6 text-center">
+                  {timer > 0 ? (
+                    <p className="text-sm text-text-muted">
+                      Resend code in <span className="text-primary-light font-semibold">{timer}s</span>
+                    </p>
+                  ) : (
+                    <button
+                      onClick={handleResend}
+                      disabled={resending}
+                      className="text-sm text-primary-light hover:text-primary font-semibold transition-colors inline-flex items-center gap-1.5"
+                    >
+                      {resending ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      )}
+                      Resend Verification Code
+                    </button>
+                  )}
+                </div>
+
+                <div className="mt-6 pt-6 border-t border-border/50 text-center">
+                  <button onClick={() => { setStep(1); setTimer(0); }} className="text-sm text-text-secondary hover:text-text-primary transition-colors inline-flex items-center gap-2 font-medium">
                     ← Back to Registration
                   </button>
                 </div>
