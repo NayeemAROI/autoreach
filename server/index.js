@@ -97,13 +97,6 @@ app.use('/api/integrations', require('./routes/integrations'));
 app.use('/api/audit-log', require('./routes/auditLog'));
 app.use('/api/profile', require('./routes/profile'));
 
-// Initialize WebSocket Bridge
-extBridge.initialize(server);
-
-// Initialize Campaign Execution Engine
-const engine = require('./services/engine');
-engine.start();
-
 // Initialize Lead Verifier
 const verifier = require('./services/leadVerifier');
 verifier.initialize();
