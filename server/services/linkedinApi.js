@@ -577,7 +577,52 @@ async function sendConnectionRequest(userId, profileUrl, message = '') {
     }
   }
 
-  if (!targetMemberId) throw new Error('Could not find target member ID');
+  // Fallback: Scrape the actual LinkedIn profile page for memberId
+  if (!targetMemberId) {
+    try {
+      console.log(`[LinkedIn API] All API endpoints failed, trying page scraping for ${publicId}...`);
+      const pageHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cookie': `li_at=${cookie.li_at}; JSESSIONID="${cookie.csrf}"`,
+      };
+      
+      const pageRes = await fetch(`https://www.linkedin.com/in/${encodeURIComponent(publicId)}/`, {
+        headers: pageHeaders,
+        redirect: 'manual',
+      });
+
+      if (pageRes.status >= 300 && pageRes.status < 400) {
+        console.warn('[LinkedIn API] Page scrape redirected — session may be expired');
+      } else if (pageRes.ok) {
+        const html = await pageRes.text();
+        
+        // Extract memberId from various patterns in page source
+        const patterns = [
+          /urn:li:fsd_profile:(\d+)/,
+          /urn:li:member:(\d+)/,
+          /"publicIdentifier":"[^"]+","memberUrn":"urn:li:member:(\d+)"/,
+          /"entityUrn":"urn:li:fs_miniProfile:[^"]*?(\d{5,})"/,
+          /profileId['":\s]+(\d{5,})/,
+          /"objectUrn":"urn:li:member:(\d+)"/,
+        ];
+
+        for (const pattern of patterns) {
+          const match = html.match(pattern);
+          if (match && match[1]) {
+            targetMemberId = match[1];
+            console.log(`[LinkedIn API] Got memberId ${targetMemberId} via page scraping (pattern: ${pattern.source.substring(0, 30)})`);
+            break;
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[LinkedIn API] Page scraping failed: ${err.message}`);
+    }
+  }
+
+  if (!targetMemberId) throw new Error('Could not find target member ID from any source');
 
   // Step 2: Send connection invitation
   headers['Content-Type'] = 'application/json; charset=UTF-8';
