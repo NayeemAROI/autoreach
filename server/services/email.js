@@ -1,3 +1,6 @@
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first'); // Force IPv4 — Render blocks IPv6 outbound
+
 const nodemailer = require('nodemailer');
 
 // System-level SMTP transporter for verification/reset emails
