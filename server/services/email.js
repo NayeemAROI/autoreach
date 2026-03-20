@@ -22,6 +22,9 @@ function getSystemTransporter() {
     port,
     secure: port === 465,
     auth: { user, pass },
+    // Force IPv4 — Render free tier doesn't support IPv6 outbound
+    tls: { rejectUnauthorized: false },
+    dnsOptions: { family: 4 },
   });
 
   console.log(`📧 SMTP configured: ${user} via ${host}:${port}`);
