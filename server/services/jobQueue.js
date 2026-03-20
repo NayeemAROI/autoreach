@@ -29,9 +29,11 @@ class JobQueue {
       leadId = null,
     } = options;
 
+    // Use SQLite-compatible datetime format (space instead of T, no Z)
+    const toSqlite = (d) => d.toISOString().replace('T', ' ').replace('Z', '').split('.')[0];
     const runAt = delay > 0
-      ? new Date(Date.now() + delay).toISOString()
-      : new Date().toISOString();
+      ? toSqlite(new Date(Date.now() + delay))
+      : toSqlite(new Date());
 
     db.prepare(`
       INSERT INTO jobs (id, type, payload, priority, maxAttempts, runAt, user_id, campaign_id, lead_id)
@@ -78,6 +80,10 @@ class JobQueue {
         ORDER BY priority DESC, createdAt ASC
         LIMIT ?
       `).all(this.concurrency);
+
+      if (jobs.length > 0) {
+        logger.info(`📋 Job Queue: Processing ${jobs.length} pending job(s)`);
+      }
 
       for (const job of jobs) {
         await this.processJob(job);

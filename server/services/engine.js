@@ -60,12 +60,12 @@ jobQueue.register('process_lead', async (payload, job) => {
     return;
   }
 
-  // Schedule check
-  if (!isWithinSchedule(leadState.schedule)) {
-    logger.info(`⏰ Lead ${leadId} outside schedule — re-queuing for 30 mins`);
-    jobQueue.add('process_lead', payload, { delay: 30 * 60 * 1000, userId, campaignId, leadId });
-    return;
-  }
+  // Schedule check DISABLED — campaigns run 24/7
+  // if (!isWithinSchedule(leadState.schedule)) {
+  //   logger.info(`⏰ Lead ${leadId} outside schedule — re-queuing for 30 mins`);
+  //   jobQueue.add('process_lead', payload, { delay: 30 * 60 * 1000, userId, campaignId, leadId });
+  //   return;
+  // }
 
   let sequence;
   try { sequence = JSON.parse(leadState.sequence || '[]'); } catch { sequence = []; }
