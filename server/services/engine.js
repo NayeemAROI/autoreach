@@ -317,6 +317,18 @@ class CampaignEngine {
     this.isRunning = true;
     logger.info('⚙️ Campaign Engine started (interval: 60s)');
 
+    // Clear stale jobs from previous runs (may have wrong datetime format)
+    const cleared = db.prepare("DELETE FROM jobs WHERE status IN ('pending', 'failed')").run();
+    if (cleared.changes > 0) {
+      logger.info(`🧹 Cleared ${cleared.changes} stale jobs from previous run`);
+    }
+
+    // Reset stuck campaign_leads so they get re-queued
+    const resetLeads = db.prepare("UPDATE campaign_leads SET next_execution_at = NULL WHERE status = 'active' AND next_execution_at IS NOT NULL").run();
+    if (resetLeads.changes > 0) {
+      logger.info(`🔄 Reset ${resetLeads.changes} campaign leads for re-processing`);
+    }
+
     // Start the job queue
     jobQueue.start();
 
