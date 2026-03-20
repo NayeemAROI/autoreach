@@ -1,45 +1,21 @@
-const dns = require('dns');
-dns.setDefaultResultOrder('ipv4first'); // Force IPv4 — Render blocks IPv6 outbound
+const { Resend } = require('resend');
 
-const nodemailer = require('nodemailer');
-
-// System-level SMTP transporter for verification/reset emails
-// Uses SMTP_* environment variables (Gmail App Password recommended)
-let systemTransporter = null;
-
-function getSystemTransporter() {
-  if (systemTransporter) return systemTransporter;
-
-  const host = process.env.SMTP_HOST;
-  const port = parseInt(process.env.SMTP_PORT || '587', 10);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !user || !pass) {
-    console.warn('⚠️ SMTP not configured — emails will be logged to console only');
-    return null;
-  }
-
-  systemTransporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-    // Force IPv4 — Render free tier doesn't support IPv6 outbound
-    tls: { rejectUnauthorized: false },
-    dnsOptions: { family: 4 },
-  });
-
-  console.log(`📧 SMTP configured: ${user} via ${host}:${port}`);
-  return systemTransporter;
-}
+// Uses Resend HTTP API — works on Render (no SMTP ports needed)
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
 
 const APP_NAME = process.env.APP_NAME || 'AutoReach';
-const FROM_EMAIL = process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@autoreach.com';
+// Resend free tier: use "onboarding@resend.dev" until domain verified
+const FROM_EMAIL = process.env.EMAIL_FROM || 'AutoReach <onboarding@resend.dev>';
+
+if (resend) {
+  console.log(`📧 Resend email configured (from: ${FROM_EMAIL})`);
+} else {
+  console.warn('⚠️ RESEND_API_KEY not set — verification codes will be logged to console only');
+}
 
 async function sendVerificationEmail(toEmail, code) {
-  const transporter = getSystemTransporter();
-
   const html = `
     <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 0;">
       <div style="background: linear-gradient(135deg, #6366f1, #8b5cf6); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -56,29 +32,33 @@ async function sendVerificationEmail(toEmail, code) {
     </div>
   `;
 
-  if (!transporter) {
-    console.log(`✉️ [NO SMTP] Verification code for ${toEmail}: ${code}`);
+  if (!resend) {
+    console.log(`✉️ [NO API KEY] Verification code for ${toEmail}: ${code}`);
     return;
   }
 
   try {
-    await transporter.sendMail({
-      from: `"${APP_NAME}" <${FROM_EMAIL}>`,
-      to: toEmail,
+    const { data, error } = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [toEmail],
       subject: `${code} — Your ${APP_NAME} Verification Code`,
       html,
     });
-    console.log(`✉️ Verification email sent to ${toEmail}`);
+
+    if (error) {
+      console.error(`❌ Resend error for ${toEmail}:`, error);
+      console.log(`✉️ [FALLBACK] Verification code for ${toEmail}: ${code}`);
+      return;
+    }
+
+    console.log(`✉️ Verification email sent to ${toEmail} (id: ${data?.id})`);
   } catch (err) {
     console.error(`❌ Failed to send verification email to ${toEmail}:`, err.message);
-    // Still log the code so user can be unblocked manually
     console.log(`✉️ [FALLBACK] Verification code for ${toEmail}: ${code}`);
   }
 }
 
 async function sendPasswordResetEmail(toEmail, code) {
-  const transporter = getSystemTransporter();
-
   const html = `
     <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 0;">
       <div style="background: linear-gradient(135deg, #6366f1, #8b5cf6); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
@@ -95,19 +75,26 @@ async function sendPasswordResetEmail(toEmail, code) {
     </div>
   `;
 
-  if (!transporter) {
-    console.log(`🔑 [NO SMTP] Password reset code for ${toEmail}: ${code}`);
+  if (!resend) {
+    console.log(`🔑 [NO API KEY] Password reset code for ${toEmail}: ${code}`);
     return;
   }
 
   try {
-    await transporter.sendMail({
-      from: `"${APP_NAME}" <${FROM_EMAIL}>`,
-      to: toEmail,
+    const { data, error } = await resend.emails.send({
+      from: FROM_EMAIL,
+      to: [toEmail],
       subject: `${code} — Your ${APP_NAME} Password Reset Code`,
       html,
     });
-    console.log(`🔑 Password reset email sent to ${toEmail}`);
+
+    if (error) {
+      console.error(`❌ Resend error for ${toEmail}:`, error);
+      console.log(`🔑 [FALLBACK] Password reset code for ${toEmail}: ${code}`);
+      return;
+    }
+
+    console.log(`🔑 Password reset email sent to ${toEmail} (id: ${data?.id})`);
   } catch (err) {
     console.error(`❌ Failed to send reset email to ${toEmail}:`, err.message);
     console.log(`🔑 [FALLBACK] Password reset code for ${toEmail}: ${code}`);
