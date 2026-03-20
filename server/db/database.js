@@ -124,6 +124,24 @@ db.exec(`
     value TEXT NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    payload TEXT DEFAULT '{}',
+    status TEXT DEFAULT 'pending',
+    priority INTEGER DEFAULT 0,
+    attempts INTEGER DEFAULT 0,
+    maxAttempts INTEGER DEFAULT 3,
+    lastError TEXT,
+    runAt TEXT DEFAULT (datetime('now')),
+    lockedAt TEXT,
+    completedAt TEXT,
+    createdAt TEXT DEFAULT (datetime('now')),
+    user_id TEXT,
+    campaign_id TEXT,
+    lead_id TEXT
+  );
 `);
 
 // === MIGRATIONS ===

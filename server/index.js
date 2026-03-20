@@ -142,4 +142,8 @@ server.listen(PORT, () => {
   logger.info(`🚀 Server running on http://localhost:${PORT}`);
   logger.info(`🔌 WebSocket Bridge on ws://localhost:${PORT}`);
   logger.info('📊 API endpoints ready');
+
+  // Start the campaign engine (job queue + scanner)
+  const campaignEngine = require('./services/engine');
+  campaignEngine.start();
 });
