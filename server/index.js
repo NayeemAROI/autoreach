@@ -115,6 +115,18 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// ─── Production: Serve React Frontend ───
+const path = require('path');
+const clientBuildPath = path.join(__dirname, '../client/dist');
+if (require('fs').existsSync(clientBuildPath)) {
+  app.use(express.static(clientBuildPath));
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api')) {
+      res.sendFile(path.join(clientBuildPath, 'index.html'));
+    }
+  });
+}
+
 // Global error handler (must be after all routes)
 const { errorHandler } = require('./middleware/errorHandler');
 app.use(errorHandler);
