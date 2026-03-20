@@ -387,7 +387,55 @@ async function sendMessage(userId, conversationId, content) {
   const headers = getHeaders(cookie.li_at, cookie.csrf);
   headers['Content-Type'] = 'application/json; charset=UTF-8';
 
-  const body = {
+  console.log(`[LinkedIn API] Sending message to thread ${threadId.substring(0, 20)}...`);
+
+  // Try Method 1: Dash Messenger API (current LinkedIn format)
+  try {
+    const dashBody = {
+      message: {
+        body: {
+          text: content,
+          attributes: []
+        },
+        renderContentUnions: [],
+        conversationUrn: `urn:li:messagingThread:${threadId}`,
+        originToken: uuidv4()
+      },
+      mailboxUrn: `urn:li:fsd_profile:${cookie.memberId}`,
+      trackingId: uuidv4().replace(/-/g, '').substring(0, 16)
+    };
+
+    const dashHeaders = { ...headers };
+    dashHeaders['Accept'] = 'application/vnd.linkedin.normalized+json+2.1';
+
+    const dashUrl = `${VOYAGER_BASE}/voyagerMessagingDashMessengerMessages?action=createMessage`;
+    const dashRes = await fetch(dashUrl, {
+      method: 'POST',
+      headers: dashHeaders,
+      body: JSON.stringify(dashBody)
+    });
+
+    if (dashRes.ok || dashRes.status === 201) {
+      console.log(`[LinkedIn API] ✅ Message sent via Dash API`);
+      return { success: true };
+    }
+
+    // If Dash fails with auth error
+    if (dashRes.status === 401 || dashRes.status === 403) {
+      const wsId = getActiveWorkspaceId(userId);
+      if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
+      throw new Error('LinkedIn session expired. Please reconnect.');
+    }
+
+    const dashErr = await dashRes.text();
+    console.warn(`[LinkedIn API] Dash API failed (${dashRes.status}), trying legacy API... Detail: ${dashErr.substring(0, 100)}`);
+  } catch (err) {
+    if (err.message.includes('expired')) throw err;
+    console.warn(`[LinkedIn API] Dash API error: ${err.message}, trying legacy...`);
+  }
+
+  // Try Method 2: Legacy events API (fallback)
+  const legacyBody = {
     eventCreate: {
       value: {
         'com.linkedin.voyager.messaging.create.MessageCreate': {
@@ -402,27 +450,26 @@ async function sendMessage(userId, conversationId, content) {
     }
   };
 
-  const url = `${VOYAGER_BASE}/messaging/conversations/${encodeURIComponent(threadId)}/events`;
-  console.log(`[LinkedIn API] Sending message to thread ${threadId.substring(0, 20)}...`);
-
-  const res = await fetch(url, {
+  const legacyUrl = `${VOYAGER_BASE}/messaging/conversations/${encodeURIComponent(threadId)}/events`;
+  const res = await fetch(legacyUrl, {
     method: 'POST',
     headers,
-    body: JSON.stringify(body)
+    body: JSON.stringify(legacyBody)
   });
 
   if (res.status === 401 || res.status === 403) {
-    db.prepare('UPDATE users SET linkedin_cookie_valid = 0 WHERE id = ?').run(userId);
+    const wsId = getActiveWorkspaceId(userId);
+    if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
     throw new Error('LinkedIn session expired. Please reconnect.');
   }
 
   if (!res.ok) {
     const text = await res.text();
-    console.error(`[LinkedIn API] Send failed: ${res.status} - ${text.substring(0, 200)}`);
+    console.error(`[LinkedIn API] Legacy send failed: ${res.status} - ${text.substring(0, 300)}`);
     throw new Error(`Failed to send message (${res.status})`);
   }
 
-  console.log(`[LinkedIn API] Message sent successfully`);
+  console.log(`[LinkedIn API] ✅ Message sent via Legacy API`);
   return { success: true };
 }
 
