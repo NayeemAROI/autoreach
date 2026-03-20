@@ -38,6 +38,7 @@ function getRandomActionDelay() {
 // Process a single lead through its campaign sequence
 jobQueue.register('process_lead', async (payload, job) => {
   const { campaignId, leadId, userId } = payload;
+  logger.info(`📌 Processing lead ${leadId} in campaign ${campaignId}`);
 
   const leadState = db.prepare(`
     SELECT cl.*, c.sequence, c.status as campaign_status, c.schedule
@@ -46,13 +47,22 @@ jobQueue.register('process_lead', async (payload, job) => {
     WHERE cl.campaign_id = ? AND cl.lead_id = ?
   `).get(campaignId, leadId);
 
-  if (!leadState || leadState.status !== 'active' || leadState.campaign_status !== 'active') {
-    return; // Skip — not active
+  if (!leadState) {
+    logger.warn(`⚠️ Lead ${leadId} not found in campaign ${campaignId}`);
+    return;
+  }
+  if (leadState.status !== 'active') {
+    logger.info(`⏭️ Lead ${leadId} status: ${leadState.status} — skipping`);
+    return;
+  }
+  if (leadState.campaign_status !== 'active') {
+    logger.info(`⏭️ Campaign ${campaignId} status: ${leadState.campaign_status} — skipping`);
+    return;
   }
 
   // Schedule check
   if (!isWithinSchedule(leadState.schedule)) {
-    // Re-queue for 30 mins later
+    logger.info(`⏰ Lead ${leadId} outside schedule — re-queuing for 30 mins`);
     jobQueue.add('process_lead', payload, { delay: 30 * 60 * 1000, userId, campaignId, leadId });
     return;
   }
@@ -61,12 +71,19 @@ jobQueue.register('process_lead', async (payload, job) => {
   try { sequence = JSON.parse(leadState.sequence || '[]'); } catch { sequence = []; }
 
   const isTree = sequence && typeof sequence === 'object' && sequence.rootId && sequence.nodes;
+  logger.info(`📋 Lead ${leadId}: sequence type=${isTree ? 'tree' : 'linear'}, stepIndex=${leadState.current_step_index}, nodeId=${leadState.current_node_id}, sequenceLength=${isTree ? Object.keys(sequence.nodes || {}).length : (Array.isArray(sequence) ? sequence.length : 0)}`);
 
   if (isTree) {
     await processLeadTree(leadState, sequence, payload);
   } else if (Array.isArray(sequence)) {
-    await processLeadLinear(leadState, sequence, payload);
+    if (sequence.length === 0) {
+      logger.warn(`⚠️ Lead ${leadId} has empty sequence — marking completed`);
+      markLeadCompleted(leadState);
+    } else {
+      await processLeadLinear(leadState, sequence, payload);
+    }
   } else {
+    logger.warn(`⚠️ Lead ${leadId} has invalid sequence type — marking completed`);
     markLeadCompleted(leadState);
   }
 });
