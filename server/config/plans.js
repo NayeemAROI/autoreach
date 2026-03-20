@@ -16,7 +16,7 @@ const PLANS = {
   pro: {
     id: 'pro',
     name: 'Pro',
-    price: 4900, // cents
+    price: 1900, // cents ($19)
     interval: 'month',
     stripePriceId: process.env.STRIPE_PRICE_PRO || '',
     limits: {
@@ -30,7 +30,7 @@ const PLANS = {
   business: {
     id: 'business',
     name: 'Business',
-    price: 14900, // cents
+    price: 4900, // cents ($49)
     interval: 'month',
     stripePriceId: process.env.STRIPE_PRICE_BUSINESS || '',
     limits: {
