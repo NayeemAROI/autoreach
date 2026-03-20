@@ -12,6 +12,25 @@ const fetch = require('node-fetch');
 
 const VOYAGER_BASE = 'https://www.linkedin.com/voyager/api';
 
+/**
+ * Wrapper around fetch that handles LinkedIn redirects properly.
+ * LinkedIn redirects to login page when auth fails — we catch that instead of following.
+ */
+async function linkedinFetch(url, options = {}) {
+  const res = await fetch(url, { ...options, redirect: 'manual' });
+  
+  // LinkedIn redirects to login when auth fails (302/301)
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get('location') || '';
+    console.error(`[LinkedIn API] Redirected to: ${location}`);
+    const error = new Error('LinkedIn session expired (redirected to login)');
+    error.status = 401;
+    throw error;
+  }
+  
+  return res;
+}
+
 function getHeaders(li_at, csrf) {
   return {
     'Accept': 'application/vnd.linkedin.normalized+json+2.1',
@@ -39,7 +58,7 @@ async function validateCookie(li_at) {
   const headers = getHeaders(li_at, csrf);
 
   try {
-    const res = await fetch(`${VOYAGER_BASE}/me`, { headers });
+    const res = await linkedinFetch(`${VOYAGER_BASE}/me`, { headers });
 
     if (res.status === 401 || res.status === 403) {
       return { valid: false, error: 'Cookie expired or invalid. Please get a fresh li_at cookie.' };
@@ -183,7 +202,7 @@ async function syncInbox(userId) {
   
   let convRes;
   try {
-    convRes = await fetch(convUrl, { headers });
+    convRes = await linkedinFetch(convUrl, { headers });
   } catch (err) {
     throw new Error(`Failed to connect to LinkedIn: ${err.message}`);
   }
@@ -223,7 +242,7 @@ async function syncInbox(userId) {
     let eventProfiles = {};
     try {
       const eventsUrl = `${VOYAGER_BASE}/messaging/conversations/${encodeURIComponent(threadId)}/events?count=40`;
-      const eventsRes = await fetch(eventsUrl, { headers });
+      const eventsRes = await linkedinFetch(eventsUrl, { headers });
       
       if (eventsRes.ok) {
         const eventsData = await eventsRes.json();
@@ -410,7 +429,7 @@ async function sendMessage(userId, conversationId, content) {
     dashHeaders['Accept'] = 'application/vnd.linkedin.normalized+json+2.1';
 
     const dashUrl = `${VOYAGER_BASE}/voyagerMessagingDashMessengerMessages?action=createMessage`;
-    const dashRes = await fetch(dashUrl, {
+    const dashRes = await linkedinFetch(dashUrl, {
       method: 'POST',
       headers: dashHeaders,
       body: JSON.stringify(dashBody)
@@ -452,7 +471,7 @@ async function sendMessage(userId, conversationId, content) {
   };
 
   const legacyUrl = `${VOYAGER_BASE}/messaging/conversations/${encodeURIComponent(threadId)}/events`;
-  const res = await fetch(legacyUrl, {
+  const res = await linkedinFetch(legacyUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify(legacyBody)
@@ -492,7 +511,7 @@ async function sendConnectionRequest(userId, profileUrl, message = '') {
 
   let targetMemberId = '';
   try {
-    const profileRes = await fetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
+    const profileRes = await linkedinFetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
     if (profileRes.status === 401 || profileRes.status === 403) {
       // Mark cookie as invalid
       const wsId = getActiveWorkspaceId(userId);
@@ -537,7 +556,7 @@ async function sendConnectionRequest(userId, profileUrl, message = '') {
   
   console.log(`[LinkedIn API] Sending connection request to ${publicId} (${targetMemberId})...`);
   
-  const res = await fetch(inviteUrl, {
+  const res = await linkedinFetch(inviteUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify(invitePayload)
@@ -577,7 +596,7 @@ async function viewProfile(userId, profileUrl) {
 
   const headers = getHeaders(cookie.li_at, cookie.csrf);
 
-  const res = await fetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
+  const res = await linkedinFetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
 
   if (res.status === 401 || res.status === 403) {
     const wsId = getActiveWorkspaceId(userId);
@@ -609,7 +628,7 @@ async function sendDirectMessage(userId, profileUrl, messageText) {
 
   // Get target memberId
   let targetMemberId = '';
-  const profileRes = await fetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
+  const profileRes = await linkedinFetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
   if (profileRes.ok) {
     const profileData = await profileRes.json();
     for (const item of (profileData.included || [])) {
@@ -642,7 +661,7 @@ async function sendDirectMessage(userId, profileUrl, messageText) {
     }
   };
 
-  const res = await fetch(`${VOYAGER_BASE}/messaging/conversations`, {
+  const res = await linkedinFetch(`${VOYAGER_BASE}/messaging/conversations`, {
     method: 'POST',
     headers,
     body: JSON.stringify(msgPayload)
