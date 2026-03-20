@@ -71,13 +71,17 @@ jobQueue.register('process_lead', async (payload, job) => {
   }
 });
 
-// Execute a LinkedIn action
+// Execute a LinkedIn action (server-side API — no extension needed)
 jobQueue.register('linkedin_action', async (payload) => {
   const { userId, leadId, campaignId, actionType, config } = payload;
 
-  const bridge = require('./linkedinBridge');
-  if (!bridge.isConnected(userId)) {
-    throw new Error('No active extension connected'); // Will trigger retry
+  const linkedinApi = require('./linkedinApi');
+  
+  // Check if user has a valid cookie
+  const cookie = linkedinApi.getCookie(userId);
+  if (!cookie || !cookie.valid) {
+    markLeadError({ campaign_id: campaignId, lead_id: leadId }, 'No valid LinkedIn cookie. Please reconnect.');
+    return;
   }
 
   const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
@@ -97,40 +101,44 @@ jobQueue.register('linkedin_action', async (payload) => {
       .replace(/\{fullName\}/gi, `${lead.firstName || ''} ${lead.lastName || ''}`.trim());
   }
 
-  // Map engine action types to extension command types
-  const ACTION_MAP = {
-    'send_invite':     'SEND_CONNECTION',
-    'view_profile':    'FIND_LEAD',
-    'send_message':    'SEND_MESSAGE',
-    'like_post':       'LIKE_POST',
-    'endorse':         'ENDORSE',
-    'comment':         'COMMENT',
-    'withdraw_invite': 'WITHDRAW_INVITE',
-    // Linear sequence aliases
-    'connect':         'SEND_CONNECTION',
-    'message':         'SEND_MESSAGE',
-    'view':            'FIND_LEAD'
-  };
-
-  const commandType = ACTION_MAP[actionType] || actionType.toUpperCase();
   const message = personalize(config?.message || config?.note || '');
 
-  const sent = bridge.sendCommand(userId, commandType, {
-    url: lead.linkedinUrl,
-    profileUrl: lead.linkedinUrl,
-    message,
-    leadId,
-    campaignId
-  });
+  try {
+    // Execute action via server-side LinkedIn API
+    if (['send_invite', 'connect'].includes(actionType)) {
+      await linkedinApi.sendConnectionRequest(userId, lead.linkedinUrl, message);
+    } else if (['view_profile', 'view', 'visit'].includes(actionType)) {
+      await linkedinApi.viewProfile(userId, lead.linkedinUrl);
+    } else if (['send_message', 'message'].includes(actionType)) {
+      await linkedinApi.sendDirectMessage(userId, lead.linkedinUrl, message);
+    } else if (actionType === 'email') {
+      // Email actions handled separately
+      logger.info(`📧 Email action for lead ${leadId} — skipping (not implemented via LinkedIn)`);
+      return;
+    } else {
+      logger.warn(`⚠️ Unknown action type: ${actionType}`);
+      return;
+    }
 
-  if (!sent) {
-    throw new Error('Failed to send command to extension');
+    // Log success
+    db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(uuidv4(), userId, leadId, campaignId, `${actionType}_completed`, `Server-side ${actionType} success`);
+
+    logger.info(`⚡ Action completed: ${actionType}`, { leadId, campaignId });
+
+  } catch (err) {
+    logger.error(`❌ LinkedIn action failed: ${actionType}`, { leadId, campaignId, error: err.message });
+    
+    if (err.message.includes('expired') || err.message.includes('cookie')) {
+      // Session expired — stop all actions for this user
+      markLeadError({ campaign_id: campaignId, lead_id: leadId }, `LinkedIn session expired: ${err.message}`);
+    } else if (err.message.includes('rate limit')) {
+      // Rate limited — retry later (job queue handles retries)
+      throw err;
+    } else {
+      markLeadError({ campaign_id: campaignId, lead_id: leadId }, `Action ${actionType} failed: ${err.message}`);
+    }
   }
-
-  db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(uuidv4(), userId, leadId, campaignId, actionType, `Dispatched ${commandType} to extension`);
-
-  logger.info(`⚡ Action dispatched: ${actionType} → ${commandType}`, { leadId, campaignId });
 });
 
 // ─── Tree-based Processing ───

@@ -426,4 +426,197 @@ async function sendMessage(userId, conversationId, content) {
   return { success: true };
 }
 
-module.exports = { validateCookie, saveCookie, getCookie, disconnectCookie, syncInbox, sendMessage };
+/**
+ * Send a connection request to a LinkedIn profile.
+ * Uses Voyager API directly — no Chrome extension needed.
+ */
+async function sendConnectionRequest(userId, profileUrl, message = '') {
+  const cookie = getCookie(userId);
+  if (!cookie || !cookie.valid) {
+    throw new Error('No valid LinkedIn cookie. Please connect your account first.');
+  }
+
+  const headers = getHeaders(cookie.li_at, cookie.csrf);
+
+  // Step 1: Get the target profile's memberId from their public URL
+  const publicId = profileUrl.replace(/.*linkedin\.com\/in\//i, '').replace(/[/?#].*/, '');
+  if (!publicId) throw new Error('Invalid LinkedIn profile URL');
+
+  let targetMemberId = '';
+  try {
+    const profileRes = await fetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
+    if (profileRes.status === 401 || profileRes.status === 403) {
+      // Mark cookie as invalid
+      const wsId = getActiveWorkspaceId(userId);
+      if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
+      throw new Error('LinkedIn session expired. Please reconnect with a fresh cookie.');
+    }
+    if (!profileRes.ok) throw new Error(`Profile fetch failed: ${profileRes.status}`);
+
+    const profileData = await profileRes.json();
+    const included = profileData.included || [];
+    
+    for (const item of included) {
+      if (item.$type === 'com.linkedin.voyager.identity.shared.MiniProfile' || 
+          (item.entityUrn && item.firstName)) {
+        targetMemberId = (item.entityUrn || '').split(':').pop();
+        if (targetMemberId) break;
+      }
+    }
+  } catch (err) {
+    if (err.message.includes('expired')) throw err;
+    throw new Error(`Failed to fetch profile: ${err.message}`);
+  }
+
+  if (!targetMemberId) throw new Error('Could not find target member ID');
+
+  // Step 2: Send connection invitation
+  headers['Content-Type'] = 'application/json; charset=UTF-8';
+
+  const invitePayload = {
+    trackingId: uuidv4().replace(/-/g, '').substring(0, 16),
+    message: message || '',
+    invitations: [],
+    excludeInvitations: [],
+    invitee: {
+      'com.linkedin.voyager.growth.invitation.InviteeProfile': {
+        profileId: targetMemberId
+      }
+    }
+  };
+
+  const inviteUrl = `${VOYAGER_BASE}/growth/normInvitations`;
+  
+  console.log(`[LinkedIn API] Sending connection request to ${publicId} (${targetMemberId})...`);
+  
+  const res = await fetch(inviteUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(invitePayload)
+  });
+
+  if (res.status === 401 || res.status === 403) {
+    const wsId = getActiveWorkspaceId(userId);
+    if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
+    throw new Error('LinkedIn session expired. Please reconnect.');
+  }
+
+  if (res.status === 429) {
+    throw new Error('LinkedIn rate limit reached. Try again later.');
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    console.error(`[LinkedIn API] Connection request failed: ${res.status} - ${text.substring(0, 200)}`);
+    throw new Error(`Connection request failed (${res.status})`);
+  }
+
+  console.log(`[LinkedIn API] ✅ Connection request sent to ${publicId}`);
+  return { success: true, targetMemberId };
+}
+
+/**
+ * View/fetch a LinkedIn profile (simulates profile visit).
+ */
+async function viewProfile(userId, profileUrl) {
+  const cookie = getCookie(userId);
+  if (!cookie || !cookie.valid) {
+    throw new Error('No valid LinkedIn cookie.');
+  }
+
+  const publicId = profileUrl.replace(/.*linkedin\.com\/in\//i, '').replace(/[/?#].*/, '');
+  if (!publicId) throw new Error('Invalid LinkedIn profile URL');
+
+  const headers = getHeaders(cookie.li_at, cookie.csrf);
+
+  const res = await fetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
+
+  if (res.status === 401 || res.status === 403) {
+    const wsId = getActiveWorkspaceId(userId);
+    if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
+    throw new Error('LinkedIn session expired.');
+  }
+
+  if (!res.ok) throw new Error(`Profile view failed: ${res.status}`);
+
+  const data = await res.json();
+  console.log(`[LinkedIn API] ✅ Viewed profile: ${publicId}`);
+  return { success: true, data };
+}
+
+/**
+ * Send a direct message to a LinkedIn connection.
+ * Only works if already connected with the target.
+ */
+async function sendDirectMessage(userId, profileUrl, messageText) {
+  const cookie = getCookie(userId);
+  if (!cookie || !cookie.valid) {
+    throw new Error('No valid LinkedIn cookie.');
+  }
+
+  const publicId = profileUrl.replace(/.*linkedin\.com\/in\//i, '').replace(/[/?#].*/, '');
+  if (!publicId) throw new Error('Invalid LinkedIn profile URL');
+
+  const headers = getHeaders(cookie.li_at, cookie.csrf);
+
+  // Get target memberId
+  let targetMemberId = '';
+  const profileRes = await fetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
+  if (profileRes.ok) {
+    const profileData = await profileRes.json();
+    for (const item of (profileData.included || [])) {
+      if (item.entityUrn && item.firstName) {
+        targetMemberId = (item.entityUrn || '').split(':').pop();
+        if (targetMemberId) break;
+      }
+    }
+  }
+
+  if (!targetMemberId) throw new Error('Could not find target member ID');
+
+  // Create new conversation with message
+  headers['Content-Type'] = 'application/json; charset=UTF-8';
+
+  const msgPayload = {
+    keyVersion: 'LEGACY_INBOX',
+    conversationCreate: {
+      eventCreate: {
+        value: {
+          'com.linkedin.voyager.messaging.create.MessageCreate': {
+            body: messageText,
+            attachments: [],
+            attributedBody: { text: messageText, attributes: [] }
+          }
+        }
+      },
+      recipients: [`urn:li:fs_miniProfile:${targetMemberId}`],
+      subtype: 'MEMBER_TO_MEMBER'
+    }
+  };
+
+  const res = await fetch(`${VOYAGER_BASE}/messaging/conversations`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(msgPayload)
+  });
+
+  if (res.status === 401 || res.status === 403) {
+    const wsId = getActiveWorkspaceId(userId);
+    if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
+    throw new Error('LinkedIn session expired.');
+  }
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Message send failed (${res.status}): ${text.substring(0, 100)}`);
+  }
+
+  console.log(`[LinkedIn API] ✅ Message sent to ${publicId}`);
+  return { success: true };
+}
+
+module.exports = { 
+  validateCookie, saveCookie, getCookie, disconnectCookie, 
+  syncInbox, sendMessage,
+  sendConnectionRequest, viewProfile, sendDirectMessage
+};
