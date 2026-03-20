@@ -48,13 +48,13 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'Workspace name is required.' });
   }
 
-  // Check plan limits
+  // Check plan limits — count only workspaces the user OWNS (not memberships from invites)
   const user = db.prepare('SELECT plan FROM users WHERE id = ?').get(userId);
-  const wsCount = db.prepare('SELECT COUNT(*) as c FROM workspace_members WHERE user_id = ?').get(userId)?.c || 0;
-  const limits = { free: 1, pro: 3, business: 10 };
-  const maxWs = limits[user?.plan] || 1;
+  const ownedCount = db.prepare("SELECT COUNT(*) as c FROM workspace_members WHERE user_id = ? AND role = 'owner'").get(userId)?.c || 0;
+  const limits = { free: 5, pro: 10, business: 50 };
+  const maxWs = limits[user?.plan] || 5;
 
-  if (wsCount >= maxWs) {
+  if (ownedCount >= maxWs) {
     return res.status(403).json({ error: `Your ${user?.plan || 'free'} plan allows up to ${maxWs} workspace(s). Upgrade to add more.` });
   }
 
