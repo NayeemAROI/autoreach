@@ -90,12 +90,17 @@ router.post('/create-checkout', async (req, res) => {
       db.prepare('UPDATE users SET stripeCustomerId = ? WHERE id = ?').run(customerId, userId);
     }
 
+    // Auto-detect base URL from request (works on localhost AND production)
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = process.env.CLIENT_URL || `${protocol}://${host}`;
+
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
       line_items: [{ price: plan.stripePriceId, quantity: 1 }],
-      success_url: `${process.env.CLIENT_URL || 'http://localhost:5173'}/billing?success=true`,
-      cancel_url: `${process.env.CLIENT_URL || 'http://localhost:5173'}/billing?canceled=true`,
+      success_url: `${baseUrl}/billing?success=true`,
+      cancel_url: `${baseUrl}/billing?canceled=true`,
       metadata: { userId, planId }
     });
 
@@ -116,9 +121,13 @@ router.post('/create-portal', async (req, res) => {
       return res.status(400).json({ error: 'No billing account found' });
     }
 
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = process.env.CLIENT_URL || `${protocol}://${host}`;
+
     const session = await stripe.billingPortal.sessions.create({
       customer: user.stripeCustomerId,
-      return_url: `${process.env.CLIENT_URL || 'http://localhost:5173'}/billing`
+      return_url: `${baseUrl}/billing`
     });
 
     res.json({ url: session.url });
