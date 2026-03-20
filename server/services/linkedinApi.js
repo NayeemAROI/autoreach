@@ -8,6 +8,7 @@
 
 const db = require('../db/database');
 const { v4: uuidv4 } = require('uuid');
+const fetch = require('node-fetch');
 
 const VOYAGER_BASE = 'https://www.linkedin.com/voyager/api';
 

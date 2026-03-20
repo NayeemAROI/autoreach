@@ -86,17 +86,7 @@ router.post('/:id/reply', async (req, res) => {
         await linkedinApi.sendMessage(req.user.id, req.params.id, content.trim());
       } catch (sendErr) {
         console.warn(`[Inbox] LinkedIn send failed: ${sendErr.message}`);
-        // Message is saved locally even if LinkedIn send fails
       }
-    } else {
-      // Fallback to extension bridge
-      try {
-        const bridge = require('../services/linkedinBridge');
-        bridge.sendCommand(req.user.id, 'SEND_MESSAGE', {
-          profileUrl: conversation.participantUrl,
-          message: content.trim()
-        });
-      } catch (e) { /* bridge not available */ }
     }
 
     const message = db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId);
@@ -169,7 +159,6 @@ router.post('/sync', (req, res) => {
 // POST /api/inbox/trigger-sync - trigger LinkedIn inbox sync
 router.post('/trigger-sync', async (req, res) => {
   try {
-    // Try server-side sync first (cookie-based)
     const cookie = linkedinApi.getCookie(req.user.id);
     if (cookie && cookie.valid) {
       const result = await linkedinApi.syncInbox(req.user.id);
@@ -179,14 +168,7 @@ router.post('/trigger-sync', async (req, res) => {
       });
     }
 
-    // Fallback to extension bridge
-    const bridge = require('../services/linkedinBridge');
-    const sent = bridge.syncInbox(req.user.id);
-    if (sent) {
-      res.json({ message: 'Sync command sent to extension. Messages will appear shortly.' });
-    } else {
-      res.status(503).json({ error: 'No LinkedIn connection. Please connect via Integrations page.' });
-    }
+    res.status(503).json({ error: 'No LinkedIn connection. Please add your li_at cookie in Settings.' });
   } catch (err) {
     console.error('[Inbox] Sync error:', err.message);
     res.status(500).json({ error: err.message });

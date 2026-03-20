@@ -1,27 +1,7 @@
 const db = require('../db/database');
-const bridge = require('./linkedinBridge');
 const jobQueue = require('./jobQueue');
 const logger = require('../utils/logger');
 const { v4: uuidv4 } = require('uuid');
-
-// ─── Action Completion Tracking ───
-// Listen for extension reporting action results
-bridge.on('action_completed', ({ action, userId, leadId, campaignId }) => {
-  logger.info(`✅ Extension confirmed action: ${action}`, { leadId, campaignId });
-  if (leadId && campaignId) {
-    db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(uuidv4(), userId, leadId, campaignId, `${action}_completed`, `Extension confirmed ${action} success`);
-  }
-});
-
-bridge.on('action_failed', ({ action, userId, leadId, campaignId, error }) => {
-  logger.error(`❌ Extension action failed: ${action}`, { leadId, campaignId, error });
-  if (leadId && campaignId) {
-    db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(uuidv4(), userId, leadId, campaignId, `${action}_failed`, `Extension error: ${error || 'unknown'}`);
-    markLeadError({ campaign_id: campaignId, lead_id: leadId }, `Action ${action} failed: ${error || 'unknown'}`);
-  }
-});
 
 // ─── Randomized delay helper ───
 function randomDelay(minMs, maxMs) {
