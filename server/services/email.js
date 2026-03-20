@@ -1,104 +1,114 @@
 const nodemailer = require('nodemailer');
 
-const db = require('../db/database');
+// System-level SMTP transporter for verification/reset emails
+// Uses SMTP_* environment variables (Gmail App Password recommended)
+let systemTransporter = null;
 
-// For local development & testing without a real SMTP, we can use Ethereal Email
-// Alternatively, if the user configures their own SMTP, we can use that.
+function getSystemTransporter() {
+  if (systemTransporter) return systemTransporter;
 
-// We will create transporters on the fly based on user_id, 
-// because in a multi-user app every user has their own SMTP settings.
-const createTransporter = async (userId = null) => {
-  let config = {};
+  const host = process.env.SMTP_HOST;
+  const port = parseInt(process.env.SMTP_PORT || '587', 10);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
 
-  if (userId) {
-    // Try to get user SMTP config
-    const settings = db.prepare('SELECT key, value FROM settings WHERE user_id = ? AND key LIKE ?').all(userId, 'smtp%');
-    settings.forEach(s => {
-      // settings keys are usually stored like 'smtpHost_user123'
-      const baseKey = s.key.split('_')[0]; 
-      config[baseKey] = s.value;
-    });
+  if (!host || !user || !pass) {
+    console.warn('⚠️ SMTP not configured — emails will be logged to console only');
+    return null;
   }
 
-  // Fallback to Test Ethereal if no custom config
-  if (!config.smtpHost) {
-    const testAccount = await nodemailer.createTestAccount();
-    return nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass,
-      },
-    });
-  }
-
-  return nodemailer.createTransport({
-    host: config.smtpHost,
-    port: parseInt(config.smtpPort, 10) || 587,
-    secure: config.smtpSecure === 'true',
-    auth: {
-      user: config.smtpUser,
-      pass: config.smtpPass,
-    },
+  systemTransporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
   });
-};
 
-async function sendVerificationEmail(toEmail, token) {
-  const transporter = await createTransporter(null); // System email
+  console.log(`📧 SMTP configured: ${user} via ${host}:${port}`);
+  return systemTransporter;
+}
 
-  const verifyUrl = `http://localhost:3001/api/auth/verify?token=${token}`;
+const APP_NAME = process.env.APP_NAME || 'AutoReach';
+const FROM_EMAIL = process.env.SMTP_FROM || process.env.SMTP_USER || 'noreply@autoreach.com';
 
-  const info = await transporter.sendMail({
-    from: '"Outreach Node" <noreply@automation.local>',
-    to: toEmail,
-    subject: 'Complete your registration - Outreach Node',
-    text: `Welcome! Please verify your email by clicking: ${verifyUrl}`,
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #6366f1;">Welcome to Outreach Node!</h2>
-        <p>Thank you for creating an account. To complete your registration and secure your workspace, we just need to verify your email address.</p>
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${verifyUrl}" style="background-color: #6366f1; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Verify Email Address</a>
-        </div>
-        <p style="color: #6b7280; font-size: 14px;">Or copy and paste this link into your browser:<br/>${verifyUrl}</p>
+async function sendVerificationEmail(toEmail, code) {
+  const transporter = getSystemTransporter();
+
+  const html = `
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 0;">
+      <div style="background: linear-gradient(135deg, #6366f1, #8b5cf6); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
+        <h1 style="color: white; margin: 0; font-size: 24px;">⚡ ${APP_NAME}</h1>
       </div>
-    `,
-  });
+      <div style="background: #ffffff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+        <h2 style="color: #1f2937; margin-top: 0;">Verify Your Email</h2>
+        <p style="color: #4b5563; line-height: 1.6;">Enter this 6-digit code to complete your registration:</p>
+        <div style="background: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
+          <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #6366f1;">${code}</span>
+        </div>
+        <p style="color: #9ca3af; font-size: 13px;">This code expires in 24 hours. If you didn't create an account, ignore this email.</p>
+      </div>
+    </div>
+  `;
 
-  console.log('📨 Verification email sent to:', toEmail);
-  if (info.messageId && info.messageId.includes('ethereal')) {
-    console.log('👀 Preview URL: ' + nodemailer.getTestMessageUrl(info));
+  if (!transporter) {
+    console.log(`✉️ [NO SMTP] Verification code for ${toEmail}: ${code}`);
+    return;
+  }
+
+  try {
+    await transporter.sendMail({
+      from: `"${APP_NAME}" <${FROM_EMAIL}>`,
+      to: toEmail,
+      subject: `${code} — Your ${APP_NAME} Verification Code`,
+      html,
+    });
+    console.log(`✉️ Verification email sent to ${toEmail}`);
+  } catch (err) {
+    console.error(`❌ Failed to send verification email to ${toEmail}:`, err.message);
+    // Still log the code so user can be unblocked manually
+    console.log(`✉️ [FALLBACK] Verification code for ${toEmail}: ${code}`);
   }
 }
 
-async function sendCampaignEmail(userId, leadEmail, subject, bodyHtml) {
+async function sendPasswordResetEmail(toEmail, code) {
+  const transporter = getSystemTransporter();
+
+  const html = `
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 0;">
+      <div style="background: linear-gradient(135deg, #6366f1, #8b5cf6); padding: 30px; border-radius: 12px 12px 0 0; text-align: center;">
+        <h1 style="color: white; margin: 0; font-size: 24px;">⚡ ${APP_NAME}</h1>
+      </div>
+      <div style="background: #ffffff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 12px 12px;">
+        <h2 style="color: #1f2937; margin-top: 0;">Password Reset</h2>
+        <p style="color: #4b5563; line-height: 1.6;">Enter this 6-digit code to reset your password:</p>
+        <div style="background: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center; margin: 20px 0;">
+          <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #6366f1;">${code}</span>
+        </div>
+        <p style="color: #9ca3af; font-size: 13px;">This code expires in 1 hour. If you didn't request this, ignore this email.</p>
+      </div>
+    </div>
+  `;
+
+  if (!transporter) {
+    console.log(`🔑 [NO SMTP] Password reset code for ${toEmail}: ${code}`);
+    return;
+  }
+
   try {
-    const transporter = await createTransporter(userId);
-    
-    // Get sender info
-    const sender = db.prepare('SELECT name, email FROM users WHERE id = ?').get(userId);
-
-    const info = await transporter.sendMail({
-      from: `"${sender.name}" <${sender.email}>`, // Could be overridden by SMTP settings
-      to: leadEmail,
-      subject: subject || 'Following up',
-      html: bodyHtml,
+    await transporter.sendMail({
+      from: `"${APP_NAME}" <${FROM_EMAIL}>`,
+      to: toEmail,
+      subject: `${code} — Your ${APP_NAME} Password Reset Code`,
+      html,
     });
-
-    console.log(`📨 Campaign email sent to ${leadEmail}`);
-    if (info.messageId && info.messageId.includes('ethereal')) {
-      console.log('👀 Preview URL: ' + nodemailer.getTestMessageUrl(info));
-    }
-    return true;
+    console.log(`🔑 Password reset email sent to ${toEmail}`);
   } catch (err) {
-    console.error(`📧 Failed to send campaign email to ${leadEmail}`, err);
-    return false;
+    console.error(`❌ Failed to send reset email to ${toEmail}:`, err.message);
+    console.log(`🔑 [FALLBACK] Password reset code for ${toEmail}: ${code}`);
   }
 }
 
 module.exports = {
   sendVerificationEmail,
-  sendCampaignEmail
+  sendPasswordResetEmail,
 };

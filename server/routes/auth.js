@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
-const { sendVerificationEmail } = require('../services/email');
+const { sendVerificationEmail, sendPasswordResetEmail } = require('../services/email');
 const { logAction } = require('../services/auditLog');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_automation_key';
@@ -76,8 +76,8 @@ router.post('/register', validateBody(schemas.register), async (req, res) => {
       }
     })();
 
-    // Generate Verification Token (6-digit code, hardcoded for testing per request)
-    const verifyToken = '123456';
+    // Generate random 6-digit verification code
+    const verifyToken = crypto.randomInt(100000, 999999).toString();
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
     
     db.prepare('INSERT INTO email_verifications (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)')
@@ -90,8 +90,8 @@ router.post('/register', validateBody(schemas.register), async (req, res) => {
     db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run(uuidv4(), wsId, userId, 'owner');
     db.prepare('UPDATE users SET activeWorkspaceId = ? WHERE id = ?').run(wsId, userId);
 
-    // Send email asynchronously (mocked for now since it's a code)
-    console.log(`✉️ Verification code for ${email}: ${verifyToken}`);
+    // Send verification email
+    sendVerificationEmail(email.toLowerCase(), verifyToken).catch(err => console.error('Email send error:', err));
 
     logAction({ _userId: userId, ip: req.ip, headers: req.headers }, 'auth.register', 'auth', userId, name, { email: email.toLowerCase() });
 
@@ -271,16 +271,16 @@ router.post('/forgot-password', async (req, res) => {
       return res.json({ message: 'If an account with that email exists, a reset link has been sent.' });
     }
 
-    // Generate reset token (6-digit code, hardcoded for testing)
-    const resetToken = '123456';
+    // Generate random 6-digit reset code
+    const resetToken = crypto.randomInt(100000, 999999).toString();
     const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
 
     // Store reset token (reuse email_verifications table)
     db.prepare('INSERT INTO email_verifications (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)')
       .run(uuidv4(), user.id, `reset_${resetToken}`, expiresAt);
 
-    // Log the reset code
-    console.log(`🔑 Password reset code for ${email}: ${resetToken}`);
+    // Send password reset email
+    sendPasswordResetEmail(email.toLowerCase(), resetToken).catch(err => console.error('Email send error:', err));
 
     res.json({ message: 'If an account with that email exists, a verification code has been sent.' });
   } catch (error) {
