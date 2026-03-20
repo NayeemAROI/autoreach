@@ -251,4 +251,310 @@ router.post('/:id/disconnect', (req, res) => {
   res.json({ success: true });
 });
 
+// ===== MEMBER MANAGEMENT =====
+
+const { requireRole } = require('../middleware/roleGuard');
+const { PLANS, getUserPlan } = require('../config/plans');
+const crypto = require('crypto');
+
+// Helper: get workspace id from active workspace
+function getWsId(req) {
+  return req.params.id || req.user.activeWorkspaceId;
+}
+
+// GET /api/workspaces/:id/members — list all members (admin/owner)
+router.get('/:id/members', requireRole('owner', 'admin'), (req, res) => {
+  const wsId = req.params.id;
+  try {
+    const members = db.prepare(`
+      SELECT u.id, u.name, u.email, u.avatar_url, u.last_login_at, u.createdAt,
+             wm.role, wm.status, wm.joinedAt, wm.invited_at
+      FROM workspace_members wm
+      JOIN users u ON u.id = wm.user_id
+      WHERE wm.workspace_id = ?
+      ORDER BY
+        CASE wm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
+        wm.joinedAt ASC
+    `).all(wsId);
+
+    // Also get pending invites
+    const invites = db.prepare(`
+      SELECT id, email, role, status, created_at, expires_at
+      FROM workspace_invites
+      WHERE workspace_id = ? AND status = 'pending'
+      ORDER BY created_at DESC
+    `).all(wsId);
+
+    // Seat info
+    const ws = db.prepare('SELECT owner_id FROM workspaces WHERE id = ?').get(wsId);
+    const ownerPlan = getUserPlan(db, ws?.owner_id || req.user.id);
+    const seatLimit = ownerPlan.limits.seats || ownerPlan.limits.teamMembers || 1;
+    const seatsUsed = members.filter(m => m.status === 'active').length;
+
+    res.json({ members, invites, seats: { used: seatsUsed, limit: seatLimit } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/workspaces/:id/members/invite — invite user
+router.post('/:id/members/invite', requireRole('owner', 'admin'), (req, res) => {
+  const wsId = req.params.id;
+  const { email, role = 'member' } = req.body;
+
+  if (!email || !email.trim()) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  if (!['member', 'admin'].includes(role)) {
+    return res.status(400).json({ error: 'Invalid role. Must be member or admin' });
+  }
+
+  // Only owner can invite as admin
+  if (role === 'admin' && req.workspaceRole !== 'owner') {
+    return res.status(403).json({ error: 'Only workspace owner can invite admins' });
+  }
+
+  try {
+    // Check seat limit
+    const ws = db.prepare('SELECT owner_id FROM workspaces WHERE id = ?').get(wsId);
+    const ownerPlan = getUserPlan(db, ws?.owner_id || req.user.id);
+    const seatLimit = ownerPlan.limits.seats || ownerPlan.limits.teamMembers || 1;
+    const currentMembers = db.prepare('SELECT COUNT(*) as c FROM workspace_members WHERE workspace_id = ? AND status = ?').get(wsId, 'active')?.c || 0;
+
+    if (currentMembers >= seatLimit) {
+      return res.status(403).json({ error: `Seat limit reached (${seatLimit}). Upgrade your plan to add more members.` });
+    }
+
+    // Check if already a member
+    const normalizedEmail = email.trim().toLowerCase();
+    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(normalizedEmail);
+    if (existingUser) {
+      const existingMember = db.prepare('SELECT id, status FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, existingUser.id);
+      if (existingMember && existingMember.status === 'active') {
+        return res.status(409).json({ error: 'User is already a member of this workspace' });
+      }
+    }
+
+    // Check for existing pending invite
+    const existingInvite = db.prepare('SELECT id FROM workspace_invites WHERE workspace_id = ? AND email = ? AND status = ?').get(wsId, normalizedEmail, 'pending');
+    if (existingInvite) {
+      return res.status(409).json({ error: 'An invitation is already pending for this email' });
+    }
+
+    // Create invite
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+    const inviteId = uuidv4();
+
+    db.prepare(`
+      INSERT INTO workspace_invites (id, workspace_id, email, role, token, status, invited_by, expires_at)
+      VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+    `).run(inviteId, wsId, normalizedEmail, role, token, req.user.id, expiresAt);
+
+    logAction(req, 'workspace.member_invited', 'workspace', wsId, normalizedEmail, { role });
+
+    // If user already exists in system, auto-accept
+    if (existingUser) {
+      // Add them directly
+      const existingMember = db.prepare('SELECT id, status FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, existingUser.id);
+      if (existingMember) {
+        db.prepare("UPDATE workspace_members SET status = 'active', role = ? WHERE id = ?").run(role, existingMember.id);
+      } else {
+        db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role, status, invited_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'))').run(uuidv4(), wsId, existingUser.id, role, 'active');
+      }
+      db.prepare("UPDATE workspace_invites SET status = 'accepted' WHERE id = ?").run(inviteId);
+
+      return res.json({ success: true, message: 'User added to workspace', autoAccepted: true });
+    }
+
+    console.log(`📧 Invite sent to ${normalizedEmail} — token: ${token}`);
+    res.json({ success: true, message: 'Invitation sent', token, inviteId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/workspaces/:id/members/:userId/role — change role
+router.patch('/:id/members/:userId/role', requireRole('owner'), (req, res) => {
+  const { id: wsId, userId: targetUserId } = req.params;
+  const { role } = req.body;
+
+  if (!['member', 'admin'].includes(role)) {
+    return res.status(400).json({ error: 'Role must be member or admin' });
+  }
+
+  // Can't change own role
+  if (targetUserId === req.user.id) {
+    return res.status(400).json({ error: 'Cannot change your own role' });
+  }
+
+  try {
+    // Verify target is a member
+    const target = db.prepare('SELECT * FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, targetUserId);
+    if (!target) return res.status(404).json({ error: 'Member not found' });
+
+    // Can't change owner role
+    if (target.role === 'owner') {
+      return res.status(403).json({ error: 'Cannot change owner role' });
+    }
+
+    db.prepare('UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?').run(role, wsId, targetUserId);
+    logAction(req, 'workspace.role_changed', 'workspace', wsId, targetUserId, { newRole: role });
+    res.json({ success: true, message: `Role changed to ${role}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/workspaces/:id/members/:userId/status — activate/deactivate
+router.patch('/:id/members/:userId/status', requireRole('owner', 'admin'), (req, res) => {
+  const { id: wsId, userId: targetUserId } = req.params;
+  const { status } = req.body;
+
+  if (!['active', 'deactivated'].includes(status)) {
+    return res.status(400).json({ error: 'Status must be active or deactivated' });
+  }
+
+  if (targetUserId === req.user.id) {
+    return res.status(400).json({ error: 'Cannot change your own status' });
+  }
+
+  try {
+    const target = db.prepare('SELECT * FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, targetUserId);
+    if (!target) return res.status(404).json({ error: 'Member not found' });
+
+    // Admin can't deactivate owner
+    if (target.role === 'owner') {
+      return res.status(403).json({ error: 'Cannot deactivate workspace owner' });
+    }
+
+    // Admin can't deactivate other admins
+    if (target.role === 'admin' && req.workspaceRole === 'admin') {
+      return res.status(403).json({ error: 'Admins cannot change status of other admins' });
+    }
+
+    db.prepare('UPDATE workspace_members SET status = ? WHERE workspace_id = ? AND user_id = ?').run(status, wsId, targetUserId);
+    logAction(req, `workspace.member_${status}`, 'workspace', wsId, targetUserId);
+    res.json({ success: true, message: `Member ${status === 'active' ? 'activated' : 'deactivated'}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/workspaces/:id/members/:userId — remove member
+router.delete('/:id/members/:userId', requireRole('owner', 'admin'), (req, res) => {
+  const { id: wsId, userId: targetUserId } = req.params;
+
+  if (targetUserId === req.user.id) {
+    return res.status(400).json({ error: 'Cannot remove yourself' });
+  }
+
+  try {
+    const target = db.prepare('SELECT * FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(wsId, targetUserId);
+    if (!target) return res.status(404).json({ error: 'Member not found' });
+
+    if (target.role === 'owner') {
+      return res.status(403).json({ error: 'Cannot remove workspace owner' });
+    }
+
+    if (target.role === 'admin' && req.workspaceRole === 'admin') {
+      return res.status(403).json({ error: 'Admins cannot remove other admins' });
+    }
+
+    db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(wsId, targetUserId);
+
+    // If removed user had this as active workspace, switch them
+    const removedUser = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(targetUserId);
+    if (removedUser?.activeWorkspaceId === wsId) {
+      const nextWs = db.prepare('SELECT workspace_id FROM workspace_members WHERE user_id = ? LIMIT 1').get(targetUserId);
+      db.prepare('UPDATE users SET activeWorkspaceId = ? WHERE id = ?').run(nextWs?.workspace_id || '', targetUserId);
+    }
+
+    logAction(req, 'workspace.member_removed', 'workspace', wsId, targetUserId);
+    res.json({ success: true, message: 'Member removed from workspace' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/workspaces/:id/invites/:inviteId — cancel invite
+router.delete('/:id/invites/:inviteId', requireRole('owner', 'admin'), (req, res) => {
+  const { id: wsId, inviteId } = req.params;
+  try {
+    db.prepare("DELETE FROM workspace_invites WHERE id = ? AND workspace_id = ?").run(inviteId, wsId);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/workspaces/join/:token — accept invite (no auth required from a fresh user)
+router.post('/join/:token', (req, res) => {
+  const { token } = req.params;
+  try {
+    const invite = db.prepare("SELECT * FROM workspace_invites WHERE token = ? AND status = 'pending'").get(token);
+    if (!invite) return res.status(404).json({ error: 'Invalid or expired invite' });
+
+    if (new Date(invite.expires_at) < new Date()) {
+      db.prepare("UPDATE workspace_invites SET status = 'expired' WHERE id = ?").run(invite.id);
+      return res.status(400).json({ error: 'Invite has expired' });
+    }
+
+    // Check if user exists
+    const user = db.prepare('SELECT id FROM users WHERE email = ?').get(invite.email);
+    if (!user) {
+      return res.json({ requiresRegistration: true, email: invite.email, workspace_id: invite.workspace_id });
+    }
+
+    // Add user to workspace
+    const existing = db.prepare('SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?').get(invite.workspace_id, user.id);
+    if (existing) {
+      db.prepare("UPDATE workspace_members SET status = 'active', role = ? WHERE id = ?").run(invite.role, existing.id);
+    } else {
+      db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role, status) VALUES (?, ?, ?, ?, ?)').run(uuidv4(), invite.workspace_id, user.id, invite.role, 'active');
+    }
+
+    db.prepare("UPDATE workspace_invites SET status = 'accepted' WHERE id = ?").run(invite.id);
+    res.json({ success: true, message: 'Joined workspace!', workspace_id: invite.workspace_id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/workspaces/:id/settings — workspace settings (admin/owner)
+router.get('/:id/settings', requireRole('owner', 'admin'), (req, res) => {
+  const wsId = req.params.id;
+  try {
+    const ws = db.prepare(`
+      SELECT id, name, slug, owner_id,
+             linkedin_cookie_valid, linkedin_profile_name, linkedin_profile_url,
+             linkedin_member_id, linkedin_connected_at, createdAt
+      FROM workspaces WHERE id = ?
+    `).get(wsId);
+    if (!ws) return res.status(404).json({ error: 'Workspace not found' });
+
+    const memberCount = db.prepare('SELECT COUNT(*) as c FROM workspace_members WHERE workspace_id = ?').get(wsId)?.c || 0;
+    const isOwner = ws.owner_id === req.user.id;
+
+    res.json({
+      workspace: {
+        id: ws.id,
+        name: ws.name,
+        slug: ws.slug,
+        owner_id: ws.owner_id,
+        linkedinConnected: !!ws.linkedin_cookie_valid,
+        linkedinProfileName: ws.linkedin_profile_name || '',
+        linkedinProfileUrl: ws.linkedin_profile_url || '',
+        linkedinConnectedAt: ws.linkedin_connected_at || '',
+        memberCount,
+        createdAt: ws.createdAt,
+      },
+      isOwner
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

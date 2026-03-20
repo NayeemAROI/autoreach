@@ -2,16 +2,21 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Sidebar from './components/Sidebar'
+import TopBar from './components/TopBar'
 import Dashboard from './pages/Dashboard'
 import Leads from './pages/Leads'
 import Campaigns from './pages/Campaigns'
 import CampaignBuilder from './pages/CampaignBuilder'
+import CampaignDetails from './pages/CampaignDetails'
 import Settings from './pages/Settings'
 import Billing from './pages/Billing'
 import Inbox from './pages/Inbox'
 import Integrations from './pages/Integrations'
 import Analytics from './pages/Analytics'
 import ActivityLog from './pages/ActivityLog'
+import Profile from './pages/Profile'
+import WorkspaceMembers from './pages/WorkspaceMembers'
+import WorkspaceSettings from './pages/WorkspaceSettings'
 import Login from './pages/Login'
 import Register from './pages/Register'
 import ForgotPassword from './pages/ForgotPassword'
@@ -22,9 +27,16 @@ function DashboardLayout({ children }) {
   return (
     <div className="flex w-full min-h-screen bg-bg-primary">
       <Sidebar />
-      <main className="flex-1 ml-[260px] p-8 overflow-auto">
-        {children}
-      </main>
+      <div className="flex-1 ml-[260px] flex flex-col min-h-screen">
+        {/* Top header row — workspace dropdown aligned right */}
+        <div className="shrink-0 flex items-center justify-end px-8 pt-5 pb-0">
+          <TopBar />
+        </div>
+        {/* Page content */}
+        <main className="flex-1 p-8 pt-4 overflow-auto">
+          {children}
+        </main>
+      </div>
     </div>
   )
 }
@@ -62,6 +74,11 @@ function App() {
               <DashboardLayout><Campaigns /></DashboardLayout>
             </ProtectedRoute>
           } />
+          <Route path="/campaigns/:id" element={
+            <ProtectedRoute>
+              <DashboardLayout><CampaignDetails /></DashboardLayout>
+            </ProtectedRoute>
+          } />
           <Route path="/campaigns/:id/builder" element={
             <ProtectedRoute>
               <DashboardLayout><CampaignBuilder /></DashboardLayout>
@@ -95,6 +112,21 @@ function App() {
           <Route path="/activity-log" element={
             <ProtectedRoute>
               <DashboardLayout><ActivityLog /></DashboardLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/profile" element={
+            <ProtectedRoute>
+              <DashboardLayout><Profile /></DashboardLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/workspace/members" element={
+            <ProtectedRoute>
+              <DashboardLayout><WorkspaceMembers /></DashboardLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/workspace/settings" element={
+            <ProtectedRoute>
+              <DashboardLayout><WorkspaceSettings /></DashboardLayout>
             </ProtectedRoute>
           } />
         </Routes>

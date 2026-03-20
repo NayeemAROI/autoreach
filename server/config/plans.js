@@ -9,7 +9,8 @@ const PLANS = {
       leads: 100,
       campaigns: 2,
       dailyActions: 25,
-      teamMembers: 1
+      seats: 1,
+      teamMembers: 1 // backward compat
     }
   },
   pro: {
@@ -22,6 +23,7 @@ const PLANS = {
       leads: 2500,
       campaigns: 15,
       dailyActions: 150,
+      seats: 3,
       teamMembers: 3
     }
   },
@@ -35,6 +37,7 @@ const PLANS = {
       leads: Infinity,
       campaigns: Infinity,
       dailyActions: 500,
+      seats: 10,
       teamMembers: 10
     }
   }
@@ -53,4 +56,12 @@ function getUserUsage(db, userId) {
   return { leads, campaigns, todayActions };
 }
 
-module.exports = { PLANS, getUserPlan, getUserUsage };
+function getUserSeatUsage(db, userId) {
+  const user = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+  if (!user?.activeWorkspaceId) return { used: 1, limit: 1 };
+  const used = db.prepare("SELECT COUNT(*) as c FROM workspace_members WHERE workspace_id = ? AND status = 'active'").get(user.activeWorkspaceId)?.c || 1;
+  const plan = getUserPlan(db, userId);
+  return { used, limit: plan.limits.seats };
+}
+
+module.exports = { PLANS, getUserPlan, getUserUsage, getUserSeatUsage };

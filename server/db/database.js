@@ -256,81 +256,6 @@ for (const u of usersWithoutWorkspace) {
   }
 }
 
-// ===== Multi-workspace LinkedIn support =====
-// Add LinkedIn columns to workspaces table
-const wsColumns = db.prepare("PRAGMA table_info(workspaces)").all();
-if (!wsColumns.some(col => col.name === 'linkedin_cookie')) {
-  console.log('Migration: Adding LinkedIn columns to workspaces');
-  try {
-    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_cookie TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_csrf TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_cookie_valid INTEGER DEFAULT 0").run();
-    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_profile_name TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_profile_url TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_member_id TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_connected_at TEXT DEFAULT ''").run();
-    // Copy LinkedIn data from users to their default workspace
-    db.prepare(`
-      UPDATE workspaces SET 
-        linkedin_cookie = (SELECT linkedin_cookie FROM users WHERE users.id = workspaces.owner_id),
-        linkedin_csrf = (SELECT linkedin_csrf FROM users WHERE users.id = workspaces.owner_id),
-        linkedin_cookie_valid = (SELECT linkedin_cookie_valid FROM users WHERE users.id = workspaces.owner_id),
-        linkedin_profile_name = (SELECT linkedin_profile_name FROM users WHERE users.id = workspaces.owner_id),
-        linkedin_profile_url = (SELECT linkedin_profile_url FROM users WHERE users.id = workspaces.owner_id),
-        linkedin_connected_at = (SELECT linkedin_connected_at FROM users WHERE users.id = workspaces.owner_id)
-    `).run();
-    console.log('Migration: Copied LinkedIn data from users to workspaces');
-  } catch(e) {
-    console.warn('Workspace LinkedIn migration warning:', e.message);
-  }
-}
-
-// Add workspace_id to data tables
-const leadsColumns = db.prepare("PRAGMA table_info(leads)").all();
-if (!leadsColumns.some(col => col.name === 'workspace_id')) {
-  console.log('Migration: Adding workspace_id to data tables');
-  try {
-    db.prepare("ALTER TABLE leads ADD COLUMN workspace_id TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE campaigns ADD COLUMN workspace_id TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE activities ADD COLUMN workspace_id TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE events ADD COLUMN workspace_id TEXT DEFAULT ''").run();
-    db.prepare("ALTER TABLE conversations ADD COLUMN workspace_id TEXT DEFAULT ''").run();
-    // Populate workspace_id from user's active workspace
-    db.prepare(`UPDATE leads SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = leads.user_id) WHERE workspace_id = ''`).run();
-    db.prepare(`UPDATE campaigns SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = campaigns.user_id) WHERE workspace_id = ''`).run();
-    db.prepare(`UPDATE activities SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = activities.user_id) WHERE workspace_id = ''`).run();
-    db.prepare(`UPDATE events SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = events.user_id) WHERE workspace_id = ''`).run();
-    db.prepare(`UPDATE conversations SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = conversations.user_id) WHERE workspace_id = ''`).run();
-    // Create indexes
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_leads_workspace ON leads(workspace_id)').run();
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_campaigns_workspace ON campaigns(workspace_id)').run();
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id)').run();
-    console.log('Migration: workspace_id added and populated on all data tables');
-  } catch(e) {
-    console.warn('workspace_id migration warning:', e.message);
-  }
-}
-
-// Migration: Ensure only the user's active workspace keeps LinkedIn data
-// (the earlier migration incorrectly copied LinkedIn to ALL workspaces)
-try {
-  const allUsers = db.prepare('SELECT id, activeWorkspaceId FROM users WHERE activeWorkspaceId IS NOT NULL AND activeWorkspaceId != \'\'').all();
-  for (const u of allUsers) {
-    const cleared = db.prepare(`
-      UPDATE workspaces SET 
-        linkedin_cookie = '', linkedin_csrf = '', linkedin_cookie_valid = 0,
-        linkedin_profile_name = '', linkedin_profile_url = '', linkedin_member_id = '',
-        linkedin_connected_at = ''
-      WHERE owner_id = ? AND id != ? AND linkedin_cookie != ''
-    `).run(u.id, u.activeWorkspaceId);
-    if (cleared.changes > 0) {
-      console.log(`Migration: Cleared LinkedIn from ${cleared.changes} non-default workspace(s) for user ${u.id}`);
-    }
-  }
-} catch(e) {
-  console.warn('LinkedIn isolation migration warning:', e.message);
-}
-
 // Audit log table for comprehensive activity tracking
 db.exec(`
   CREATE TABLE IF NOT EXISTS audit_log (
@@ -353,11 +278,6 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_audit_date ON audit_log(created_at);
 `);
 
-// Migration: Add linkedinThreadId to conversations
-try {
-  db.prepare("ALTER TABLE conversations ADD COLUMN linkedinThreadId TEXT DEFAULT ''").run();
-} catch(e) { /* column already exists */ }
-
 // Events table for conversion tracking
 db.exec(`
   CREATE TABLE IF NOT EXISTS events (
@@ -374,6 +294,28 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
   CREATE INDEX IF NOT EXISTS idx_events_campaign ON events(campaign_id);
   CREATE INDEX IF NOT EXISTS idx_events_date ON events(created_at);
+`);
+
+// Campaign execution logs table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS campaign_logs (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT NOT NULL,
+    lead_id TEXT DEFAULT '',
+    step_id TEXT DEFAULT '',
+    action_type TEXT NOT NULL,
+    result TEXT DEFAULT 'pending',
+    error_message TEXT DEFAULT '',
+    retry_count INTEGER DEFAULT 0,
+    workspace_id TEXT DEFAULT '',
+    user_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_campaign_logs_campaign ON campaign_logs(campaign_id);
+  CREATE INDEX IF NOT EXISTS idx_campaign_logs_lead ON campaign_logs(lead_id);
+  CREATE INDEX IF NOT EXISTS idx_campaign_logs_date ON campaign_logs(created_at);
 `);
 
 // Create jobs queue table
@@ -443,19 +385,174 @@ db.exec(`
   );
 `);
 
+// ====== Multi-workspace LinkedIn support ======
+
+// Add LinkedIn columns to workspaces table
+const wsColumns = db.prepare("PRAGMA table_info(workspaces)").all();
+if (!wsColumns.some(col => col.name === 'linkedin_cookie')) {
+  console.log('Migration: Adding LinkedIn columns to workspaces');
+  try {
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_cookie TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_csrf TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_cookie_valid INTEGER DEFAULT 0").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_profile_name TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_profile_url TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_member_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE workspaces ADD COLUMN linkedin_connected_at TEXT DEFAULT ''").run();
+    // Copy LinkedIn data from users to their default workspace
+    db.prepare(`
+      UPDATE workspaces SET 
+        linkedin_cookie = (SELECT linkedin_cookie FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_csrf = (SELECT linkedin_csrf FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_cookie_valid = (SELECT linkedin_cookie_valid FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_profile_name = (SELECT linkedin_profile_name FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_profile_url = (SELECT linkedin_profile_url FROM users WHERE users.id = workspaces.owner_id),
+        linkedin_connected_at = (SELECT linkedin_connected_at FROM users WHERE users.id = workspaces.owner_id)
+    `).run();
+    console.log('Migration: Copied LinkedIn data from users to workspaces');
+  } catch(e) {
+    console.warn('Workspace LinkedIn migration warning:', e.message);
+  }
+}
+
+// Add workspace_id to data tables
+const leadsColumns = db.prepare("PRAGMA table_info(leads)").all();
+if (!leadsColumns.some(col => col.name === 'workspace_id')) {
+  console.log('Migration: Adding workspace_id to data tables');
+  try {
+    db.prepare("ALTER TABLE leads ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE campaigns ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE activities ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE events ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE conversations ADD COLUMN workspace_id TEXT DEFAULT ''").run();
+    // Populate workspace_id from user's active workspace
+    db.prepare(`UPDATE leads SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = leads.user_id) WHERE workspace_id = ''`).run();
+    db.prepare(`UPDATE campaigns SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = campaigns.user_id) WHERE workspace_id = ''`).run();
+    db.prepare(`UPDATE activities SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = activities.user_id) WHERE workspace_id = ''`).run();
+    db.prepare(`UPDATE events SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = events.user_id) WHERE workspace_id = ''`).run();
+    db.prepare(`UPDATE conversations SET workspace_id = (SELECT activeWorkspaceId FROM users WHERE users.id = conversations.user_id) WHERE workspace_id = ''`).run();
+    // Create indexes
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_leads_workspace ON leads(workspace_id)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_campaigns_workspace ON campaigns(workspace_id)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id)').run();
+    console.log('Migration: workspace_id added and populated on all data tables');
+  } catch(e) {
+    console.warn('workspace_id migration warning:', e.message);
+  }
+}
+
+// === Profile & Workspace Management Migrations ===
+
+// Add profile columns to users
+const usersProfileCols = db.prepare("PRAGMA table_info(users)").all();
+if (!usersProfileCols.some(col => col.name === 'phone')) {
+  console.log('Migration: Adding profile columns to users');
+  try {
+    db.prepare("ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE users ADD COLUMN title TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT 'UTC+6'").run();
+    db.prepare("ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''").run();
+    db.prepare("ALTER TABLE users ADD COLUMN last_login_at TEXT DEFAULT ''").run();
+  } catch(e) {
+    console.warn('User profile migration warning:', e.message);
+  }
+}
+
+// Create user_preferences table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_preferences (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE,
+    email_notifications INTEGER DEFAULT 1,
+    campaign_notifications INTEGER DEFAULT 1,
+    inbox_notifications INTEGER DEFAULT 1,
+    weekly_summary INTEGER DEFAULT 1,
+    theme TEXT DEFAULT 'dark',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+`);
+
+// Create workspace_invites table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS workspace_invites (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    role TEXT DEFAULT 'member',
+    token TEXT NOT NULL UNIQUE,
+    status TEXT DEFAULT 'pending',
+    invited_by TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+    FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_invites_token ON workspace_invites(token);
+  CREATE INDEX IF NOT EXISTS idx_invites_email ON workspace_invites(email);
+  CREATE INDEX IF NOT EXISTS idx_invites_workspace ON workspace_invites(workspace_id);
+`);
+
+// Add status + invited_at to workspace_members
+const wmCols = db.prepare("PRAGMA table_info(workspace_members)").all();
+if (!wmCols.some(col => col.name === 'status')) {
+  console.log('Migration: Adding status/invited_at to workspace_members');
+  try {
+    db.prepare("ALTER TABLE workspace_members ADD COLUMN status TEXT DEFAULT 'active'").run();
+    db.prepare("ALTER TABLE workspace_members ADD COLUMN invited_at TEXT DEFAULT ''").run();
+  } catch(e) {
+    console.warn('workspace_members migration warning:', e.message);
+  }
+}
+
+// Migration: Ensure only the user's active workspace keeps LinkedIn data
+// (the earlier migration incorrectly copied LinkedIn to ALL workspaces)
+try {
+  const allUsers = db.prepare('SELECT id, activeWorkspaceId FROM users WHERE activeWorkspaceId IS NOT NULL AND activeWorkspaceId != \'\'').all();
+  for (const u of allUsers) {
+    const cleared = db.prepare(`
+      UPDATE workspaces SET 
+        linkedin_cookie = '', linkedin_csrf = '', linkedin_cookie_valid = 0,
+        linkedin_profile_name = '', linkedin_profile_url = '', linkedin_member_id = '',
+        linkedin_connected_at = ''
+      WHERE owner_id = ? AND id != ? AND linkedin_cookie != ''
+    `).run(u.id, u.activeWorkspaceId);
+    if (cleared.changes > 0) {
+      console.log(`Migration: Cleared LinkedIn from ${cleared.changes} non-default workspace(s) for user ${u.id}`);
+    }
+  }
+} catch(e) {
+  console.warn('LinkedIn isolation migration warning:', e.message);
+}
+
+// End of Create inbox tables
+
 // Create Default UI User if no users exist
 const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get();
 let defaultUserId = '';
 
 if (userCount.count === 0) {
   defaultUserId = uuidv4();
+  const defaultWsId = uuidv4();
   const hashedPassword = bcrypt.hashSync('admin123', 10);
   
-  db.prepare('INSERT INTO users (id, name, email, password, is_verified) VALUES (?, ?, ?, ?, 1)').run(
+  db.prepare('INSERT INTO users (id, name, email, password, is_verified, role, activeWorkspaceId, plan) VALUES (?, ?, ?, ?, 1, ?, ?, ?)').run(
     defaultUserId,
     'System Admin',
     'admin@example.com',
-    hashedPassword
+    hashedPassword,
+    'owner',
+    defaultWsId,
+    'pro'
+  );
+
+  // Create default workspace for admin
+  db.prepare('INSERT OR IGNORE INTO workspaces (id, name, slug, owner_id) VALUES (?, ?, ?, ?)').run(
+    defaultWsId, 'Workspace 1', 'workspace-1', defaultUserId
+  );
+  db.prepare('INSERT OR IGNORE INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run(
+    uuidv4(), defaultWsId, defaultUserId, 'owner'
   );
   console.log(`👤 Created default user: admin@example.com / admin123`);
 
@@ -582,23 +679,25 @@ if (existingLeads.count === 0) {
     insertCampaign.run(uuidv4(), defaultUserId, c.name, c.status, c.type, c.sequence, c.stats);
   }
 
-  // Seed sample activities
+  // Seed sample activities into audit_log
   const activityTypes = [
-    { type: 'connection_sent', detail: 'Connection request sent to' },
-    { type: 'connection_accepted', detail: 'Connection accepted by' },
-    { type: 'message_sent', detail: 'Message sent to' },
-    { type: 'message_replied', detail: 'Reply received from' },
-    { type: 'email_sent', detail: 'Email sent to' },
-    { type: 'email_opened', detail: 'Email opened by' },
-    { type: 'profile_visited', detail: 'Profile visited:' },
+    { type: 'auth.login', detail: 'User logged in', entity_type: 'auth' },
+    { type: 'lead.created', detail: 'Lead added manually', entity_type: 'lead' },
+    { type: 'campaign.created', detail: 'Created new campaign', entity_type: 'campaign' },
+    { type: 'campaign.started', detail: 'Started execution for', entity_type: 'campaign' },
+    { type: 'workspace.updated', detail: 'Modified workspace settings', entity_type: 'workspace' },
+    { type: 'integration.linkedin_connected', detail: 'Connected LinkedIn account', entity_type: 'integration' },
+    { type: 'auth.register', detail: 'User registered account', entity_type: 'auth' },
   ];
 
   const insertActivity = db.prepare(`
-    INSERT INTO activities (id, user_id, leadId, type, detail, timestamp)
-    VALUES (?, ?, ?, ?, ?, datetime('now', ?))
+    INSERT INTO audit_log (id, user_id, workspace_id, action, entity_type, entity_id, entity_name, details, ip_address, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))
   `);
 
   const leadRecords = db.prepare('SELECT id, firstName, lastName FROM leads WHERE user_id = ?').all(defaultUserId);
+  const userRow = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(defaultUserId);
+  const userWsId = userRow?.activeWorkspaceId || '';
   for (let i = 0; i < 30; i++) {
     if(leadRecords.length === 0) break;
     const lead = leadRecords[Math.floor(Math.random() * leadRecords.length)];
@@ -607,9 +706,13 @@ if (existingLeads.count === 0) {
     insertActivity.run(
       uuidv4(),
       defaultUserId,
-      lead.id,
+      userWsId,
       activity.type,
-      `${activity.detail} ${lead.firstName} ${lead.lastName}`,
+      activity.entity_type,
+      lead.id,
+      activity.entity_type === 'lead' ? `${lead.firstName} ${lead.lastName}` : (activity.entity_type === 'campaign' ? 'SaaS Outreach' : 'AutoReach Admin'),
+      JSON.stringify({ note: activity.detail }),
+      '192.168.1.10',
       hoursAgo
     );
   }

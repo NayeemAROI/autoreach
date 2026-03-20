@@ -75,7 +75,8 @@ export default function ActivityLog() {
         const prefixMap = { Auth: 'auth', Leads: 'lead', Campaigns: 'campaign', Workspace: 'workspace', Integration: 'integration' }
         params.set('action', prefixMap[category] || '')
       }
-      const data = await apiFetch(`/api/audit-log?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      const res = await apiFetch(`/api/audit-log?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      const data = await res.json()
       setLogs(data.logs || [])
       setTotal(data.total || 0)
     } catch (e) {

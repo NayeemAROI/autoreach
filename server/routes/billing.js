@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../db/database');
 const auth = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
-const { PLANS, getUserPlan, getUserUsage } = require('../config/plans');
+const { PLANS, getUserPlan, getUserUsage, getUserSeatUsage } = require('../config/plans');
 
 // Stripe (only init if key exists)
 const stripeKey = process.env.STRIPE_SECRET_KEY;
@@ -37,6 +37,7 @@ router.get('/subscription', (req, res) => {
     const userId = req.user.id;
     const plan = getUserPlan(db, userId);
     const usage = getUserUsage(db, userId);
+    const seatUsage = getUserSeatUsage(db, userId);
     const sub = db.prepare('SELECT * FROM subscriptions WHERE user_id = ? ORDER BY createdAt DESC LIMIT 1').get(userId);
 
     res.json({
@@ -48,10 +49,11 @@ router.get('/subscription', (req, res) => {
           leads: plan.limits.leads === Infinity ? 'Unlimited' : plan.limits.leads,
           campaigns: plan.limits.campaigns === Infinity ? 'Unlimited' : plan.limits.campaigns,
           dailyActions: plan.limits.dailyActions,
+          seats: plan.limits.seats,
           teamMembers: plan.limits.teamMembers
         }
       },
-      usage,
+      usage: { ...usage, seats: seatUsage.used },
       subscription: sub ? {
         status: sub.status,
         currentPeriodEnd: sub.currentPeriodEnd,

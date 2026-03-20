@@ -14,6 +14,11 @@ router.get('/', (req, res) => {
   const db = require('../db/database');
   const user = db.prepare('SELECT activeWorkspaceId, role FROM users WHERE id = ?').get(userId);
 
+  // Only workspace owner can view audit logs
+  if (!user || user.role !== 'owner') {
+    return res.status(403).json({ error: 'Only workspace owners can access the activity log.' });
+  }
+
   try {
     const result = getLogs({
       userId: user?.role === 'owner' ? undefined : userId, // owners see all

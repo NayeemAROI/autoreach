@@ -7,14 +7,14 @@ const PLAN_FEATURES = {
     '100 Leads',
     '2 Campaigns',
     '25 Daily Actions',
-    '1 Team Member',
+    '1 Seat',
     'Basic Analytics',
   ],
   pro: [
     '2,500 Leads',
     '15 Campaigns',
     '150 Daily Actions',
-    '3 Team Members',
+    '3 Seats',
     'Advanced Analytics',
     'Priority Support',
   ],
@@ -22,7 +22,7 @@ const PLAN_FEATURES = {
     'Unlimited Leads',
     'Unlimited Campaigns',
     '500 Daily Actions',
-    '10 Team Members',
+    '10 Seats',
     'Advanced Analytics',
     'Priority Support',
     'Custom Integrations',
@@ -145,11 +145,12 @@ export default function Billing() {
               </button>
             )}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {[
               { label: 'Leads', used: usage.leads, limit: currentPlan.limits.leads },
               { label: 'Campaigns', used: usage.campaigns, limit: currentPlan.limits.campaigns },
               { label: 'Daily Actions', used: usage.todayActions, limit: currentPlan.limits.dailyActions },
+              { label: 'Seats', used: usage.seats || 1, limit: currentPlan.limits.seats || currentPlan.limits.teamMembers || 1 },
             ].map((item, i) => {
               const isUnlimited = item.limit === 'Unlimited'
               const pct = isUnlimited ? 0 : Math.min((item.used / item.limit) * 100, 100)

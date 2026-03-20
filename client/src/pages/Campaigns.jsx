@@ -163,7 +163,8 @@ export default function Campaigns() {
             const leadCount = getLeadCount(camp)
 
             return (
-              <div key={camp.id} className={`glass-card p-5 animate-fade-in animate-fade-in-delay-${(index%4)+1} flex flex-col`}>
+              <div key={camp.id} className={`glass-card p-5 animate-fade-in animate-fade-in-delay-${(index%4)+1} flex flex-col cursor-pointer`}
+                onClick={() => navigate(`/campaigns/${camp.id}`)}>
                 {/* Card Header */}
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center gap-3">
@@ -184,12 +185,12 @@ export default function Campaigns() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <button onClick={() => handleDuplicate(camp.id)}
+                    <button onClick={(e) => { e.stopPropagation(); handleDuplicate(camp.id) }}
                       className="p-1.5 text-text-muted hover:text-primary-light hover:bg-primary/10 rounded-lg transition-colors"
                       title="Duplicate">
                       <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
                     </button>
-                    <button onClick={() => handleDelete(camp.id)}
+                    <button onClick={(e) => { e.stopPropagation(); handleDelete(camp.id) }}
                       className="p-1.5 text-text-muted hover:text-danger hover:bg-danger/10 rounded-lg transition-colors"
                       title="Delete">
                       <Trash2 className="w-4 h-4" />
@@ -227,13 +228,13 @@ export default function Campaigns() {
                 {/* Controls */}
                 <div className="flex items-center gap-2 mt-auto pt-4 border-t border-border/50">
                   <button
-                    onClick={() => navigate(`/campaigns/${camp.id}/builder`)}
+                    onClick={(e) => { e.stopPropagation(); navigate(`/campaigns/${camp.id}/builder`) }}
                     className="flex-1 btn btn-secondary btn-sm justify-center"
                   >
                     <Workflow className="w-3.5 h-3.5" /> Edit Sequence
                   </button>
                   <button 
-                    onClick={() => toggleStatus(camp.id, camp.status)}
+                    onClick={(e) => { e.stopPropagation(); toggleStatus(camp.id, camp.status) }}
                     className={`btn btn-sm px-3 ${camp.status === 'active' ? 'btn-secondary text-warning' : 'btn-primary'}`}
                   >
                     {camp.status === 'active' ? (

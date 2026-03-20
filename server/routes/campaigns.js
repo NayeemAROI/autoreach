@@ -350,5 +350,176 @@ router.get('/:id/stats', (req, res) => {
   }
 });
 
+// GET campaign analytics — metrics + daily chart data
+router.get('/:id/analytics', (req, res) => {
+  const campaignId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    const campaign = db.prepare('SELECT id, leadIds, stats FROM campaigns WHERE id = ? AND user_id = ?').get(campaignId, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    const stats = JSON.parse(campaign.stats || '{}');
+    const leadIds = JSON.parse(campaign.leadIds || '[]');
+
+    // Pipeline status counts
+    const statusCounts = db.prepare(`
+      SELECT status, COUNT(*) as count FROM campaign_leads
+      WHERE campaign_id = ? AND user_id = ? GROUP BY status
+    `).all(campaignId, userId);
+
+    const pipeline = { total: leadIds.length, active: 0, completed: 0, error: 0, paused: 0 };
+    statusCounts.forEach(row => { pipeline[row.status] = row.count; });
+    pipeline.pending = pipeline.total - (pipeline.active + pipeline.completed + pipeline.error + pipeline.paused);
+
+    // Activity type counts
+    const activityCounts = db.prepare(`
+      SELECT type, COUNT(*) as count FROM activities
+      WHERE campaignId = ? AND user_id = ? GROUP BY type
+    `).all(campaignId, userId);
+    const activities = {};
+    activityCounts.forEach(row => { activities[row.type] = row.count; });
+
+    // Daily activity for last 30 days
+    const daily = db.prepare(`
+      SELECT date(timestamp) as day, type, COUNT(*) as count
+      FROM activities WHERE campaignId = ? AND user_id = ?
+      AND timestamp >= datetime('now', '-30 days')
+      GROUP BY day, type ORDER BY day ASC
+    `).all(campaignId, userId);
+
+    // Execution logs summary
+    const logSummary = db.prepare(`
+      SELECT result, COUNT(*) as count FROM campaign_logs
+      WHERE campaign_id = ? AND user_id = ? GROUP BY result
+    `).all(campaignId, userId);
+    const logs = {};
+    logSummary.forEach(row => { logs[row.result] = row.count; });
+
+    res.json({
+      stats,
+      pipeline,
+      activities,
+      daily,
+      logs,
+      rates: {
+        acceptance: stats.sent > 0 ? Math.round((stats.accepted / stats.sent) * 100) : 0,
+        reply: stats.sent > 0 ? Math.round((stats.replied / stats.sent) * 100) : 0,
+        conversion: pipeline.total > 0 ? Math.round((pipeline.completed / pipeline.total) * 100) : 0
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET campaign execution logs with filters + pagination
+router.get('/:id/logs', (req, res) => {
+  const campaignId = req.params.id;
+  const userId = req.user.id;
+  const { result, lead_id, action_type, page = 1, limit = 50 } = req.query;
+
+  try {
+    const campaign = db.prepare('SELECT id FROM campaigns WHERE id = ? AND user_id = ?').get(campaignId, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    let where = 'WHERE cl.campaign_id = ? AND cl.user_id = ?';
+    const params = [campaignId, userId];
+
+    if (result) { where += ' AND cl.result = ?'; params.push(result); }
+    if (lead_id) { where += ' AND cl.lead_id = ?'; params.push(lead_id); }
+    if (action_type) { where += ' AND cl.action_type = ?'; params.push(action_type); }
+
+    const total = db.prepare(`SELECT COUNT(*) as count FROM campaign_logs cl ${where}`).get(...params).count;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const logs = db.prepare(`
+      SELECT cl.*, l.firstName, l.lastName, l.company, l.avatar
+      FROM campaign_logs cl
+      LEFT JOIN leads l ON cl.lead_id = l.id
+      ${where}
+      ORDER BY cl.created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, parseInt(limit), offset);
+
+    res.json({ logs, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST pause campaign
+router.post('/:id/pause', (req, res) => {
+  const userId = req.user.id;
+  try {
+    const campaign = db.prepare('SELECT id, name, status FROM campaigns WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+    if (campaign.status !== 'active') return res.status(400).json({ error: 'Only active campaigns can be paused' });
+
+    db.prepare("UPDATE campaigns SET status = 'paused', updatedAt = datetime('now') WHERE id = ?").run(req.params.id);
+    // Pause all active leads in pipeline
+    db.prepare("UPDATE campaign_leads SET status = 'paused' WHERE campaign_id = ? AND user_id = ? AND status = 'active'").run(req.params.id, userId);
+
+    logAction(req, 'campaign.paused', 'campaign', req.params.id, campaign.name);
+    res.json({ success: true, status: 'paused' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST resume campaign
+router.post('/:id/resume', (req, res) => {
+  const userId = req.user.id;
+  try {
+    const campaign = db.prepare('SELECT id, name, status FROM campaigns WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+    if (campaign.status !== 'paused' && campaign.status !== 'draft') return res.status(400).json({ error: 'Only paused or draft campaigns can be resumed' });
+
+    db.prepare("UPDATE campaigns SET status = 'active', updatedAt = datetime('now') WHERE id = ?").run(req.params.id);
+    // Resume paused leads
+    db.prepare("UPDATE campaign_leads SET status = 'active' WHERE campaign_id = ? AND user_id = ? AND status = 'paused'").run(req.params.id, userId);
+
+    logAction(req, 'campaign.resumed', 'campaign', req.params.id, campaign.name);
+    res.json({ success: true, status: 'active' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH update campaign settings
+router.patch('/:id', (req, res) => {
+  const userId = req.user.id;
+  const allowed = ['name', 'schedule', 'status'];
+  const fields = {};
+
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) {
+      fields[key] = typeof req.body[key] === 'object' ? JSON.stringify(req.body[key]) : req.body[key];
+    }
+  }
+
+  if (Object.keys(fields).length === 0) return res.status(400).json({ error: 'No valid fields to update' });
+
+  try {
+    const campaign = db.prepare('SELECT id, name FROM campaigns WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    const updates = Object.keys(fields).map(k => `${k} = ?`).join(', ');
+    const values = Object.values(fields);
+    db.prepare(`UPDATE campaigns SET ${updates}, updatedAt = datetime('now') WHERE id = ? AND user_id = ?`).run(...values, req.params.id, userId);
+
+    const updated = db.prepare('SELECT * FROM campaigns WHERE id = ?').get(req.params.id);
+    updated.sequence = JSON.parse(updated.sequence || '[]');
+    updated.stats = JSON.parse(updated.stats || '{}');
+    updated.leadIds = JSON.parse(updated.leadIds || '[]');
+    updated.schedule = JSON.parse(updated.schedule || '{}');
+
+    logAction(req, 'campaign.settings_updated', 'campaign', req.params.id, updated.name, { fields: Object.keys(fields) });
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 

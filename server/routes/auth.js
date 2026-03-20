@@ -136,6 +136,9 @@ router.post('/login', validateBody(schemas.login), async (req, res) => {
       });
     }
 
+    // Update last login time
+    db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?").run(user.id);
+
     // Generate tokens
     const accessToken = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user.id);
