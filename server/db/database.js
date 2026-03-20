@@ -1,9 +1,17 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
 
-const dbPath = path.join(__dirname, 'automation.db');
+// Use persistent disk on Render (/var/data), fallback to local for development
+const PERSIST_DIR = '/var/data';
+const usePersistedPath = process.env.NODE_ENV === 'production' && fs.existsSync(PERSIST_DIR);
+const dbPath = usePersistedPath
+  ? path.join(PERSIST_DIR, 'automation.db')
+  : path.join(__dirname, 'automation.db');
+
+console.log(`💾 Database path: ${dbPath} (persistent: ${usePersistedPath})`);
 const db = new Database(dbPath);
 
 // Enable WAL mode for better performance
