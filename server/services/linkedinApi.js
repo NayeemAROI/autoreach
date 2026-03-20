@@ -510,29 +510,71 @@ async function sendConnectionRequest(userId, profileUrl, message = '') {
   if (!publicId) throw new Error('Invalid LinkedIn profile URL');
 
   let targetMemberId = '';
-  try {
-    const profileRes = await linkedinFetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
-    if (profileRes.status === 401 || profileRes.status === 403) {
-      // Mark cookie as invalid
-      const wsId = getActiveWorkspaceId(userId);
-      if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
-      throw new Error('LinkedIn session expired. Please reconnect with a fresh cookie.');
-    }
-    if (!profileRes.ok) throw new Error(`Profile fetch failed: ${profileRes.status}`);
 
-    const profileData = await profileRes.json();
-    const included = profileData.included || [];
-    
+  // Helper: extract memberId from included items
+  function extractMemberId(included) {
     for (const item of included) {
-      if (item.$type === 'com.linkedin.voyager.identity.shared.MiniProfile' || 
-          (item.entityUrn && item.firstName)) {
-        targetMemberId = (item.entityUrn || '').split(':').pop();
-        if (targetMemberId) break;
+      const urn = item.entityUrn || item.objectUrn || '';
+      if (urn.includes('fsd_profile:') || urn.includes('member:') || urn.includes('miniProfile:')) {
+        const id = urn.split(':').pop();
+        if (id && /^\d+$/.test(id)) return id;
+      }
+      if (item.$type && item.$type.includes('MiniProfile') && item.entityUrn) {
+        const id = item.entityUrn.split(':').pop();
+        if (id && /^\d+$/.test(id)) return id;
       }
     }
-  } catch (err) {
-    if (err.message.includes('expired')) throw err;
-    throw new Error(`Failed to fetch profile: ${err.message}`);
+    return '';
+  }
+
+  // Try multiple endpoints (LinkedIn deprecates them frequently)
+  const endpoints = [
+    `${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}`,
+    `${VOYAGER_BASE}/identity/dash/profiles?q=memberIdentity&memberIdentity=${encodeURIComponent(publicId)}`,
+    `${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`,
+    `${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/networkinfo`,
+  ];
+
+  for (const endpoint of endpoints) {
+    try {
+      const profileRes = await linkedinFetch(endpoint, { headers });
+      
+      if (profileRes.status === 401 || profileRes.status === 403) {
+        const wsId = getActiveWorkspaceId(userId);
+        if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
+        throw new Error('LinkedIn session expired. Please reconnect with a fresh cookie.');
+      }
+      
+      if (profileRes.status === 410 || profileRes.status === 404) {
+        console.warn(`[LinkedIn API] Endpoint returned ${profileRes.status}: ${endpoint}`);
+        continue; // Try next endpoint
+      }
+      
+      if (!profileRes.ok) {
+        console.warn(`[LinkedIn API] Endpoint returned ${profileRes.status}: ${endpoint}`);
+        continue;
+      }
+
+      const profileData = await profileRes.json();
+      const included = profileData.included || [];
+      targetMemberId = extractMemberId(included);
+      
+      // Also check top-level
+      if (!targetMemberId && profileData.entityUrn) {
+        targetMemberId = profileData.entityUrn.split(':').pop();
+      }
+      if (!targetMemberId && profileData.miniProfile?.entityUrn) {
+        targetMemberId = profileData.miniProfile.entityUrn.split(':').pop();
+      }
+
+      if (targetMemberId) {
+        console.log(`[LinkedIn API] Got memberId ${targetMemberId} from ${endpoint.split('/api/')[1]?.substring(0, 40)}`);
+        break;
+      }
+    } catch (err) {
+      if (err.message.includes('expired')) throw err;
+      console.warn(`[LinkedIn API] Endpoint error (${endpoint.split('/api/')[1]?.substring(0, 40)}): ${err.message}`);
+    }
   }
 
   if (!targetMemberId) throw new Error('Could not find target member ID');
@@ -596,19 +638,34 @@ async function viewProfile(userId, profileUrl) {
 
   const headers = getHeaders(cookie.li_at, cookie.csrf);
 
-  const res = await linkedinFetch(`${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`, { headers });
+  // Try modern endpoint first, fallback to legacy
+  const profileEndpoints = [
+    `${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}`,
+    `${VOYAGER_BASE}/identity/profiles/${encodeURIComponent(publicId)}/profileView`,
+  ];
 
-  if (res.status === 401 || res.status === 403) {
-    const wsId = getActiveWorkspaceId(userId);
-    if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
-    throw new Error('LinkedIn session expired.');
+  for (const endpoint of profileEndpoints) {
+    const res = await linkedinFetch(endpoint, { headers });
+
+    if (res.status === 401 || res.status === 403) {
+      const wsId = getActiveWorkspaceId(userId);
+      if (wsId) db.prepare('UPDATE workspaces SET linkedin_cookie_valid = 0 WHERE id = ?').run(wsId);
+      throw new Error('LinkedIn session expired.');
+    }
+
+    if (res.status === 410 || res.status === 404) {
+      console.warn(`[LinkedIn API] viewProfile endpoint returned ${res.status}, trying next...`);
+      continue;
+    }
+
+    if (!res.ok) continue;
+
+    const data = await res.json();
+    console.log(`[LinkedIn API] ✅ Viewed profile: ${publicId}`);
+    return { success: true, data };
   }
 
-  if (!res.ok) throw new Error(`Profile view failed: ${res.status}`);
-
-  const data = await res.json();
-  console.log(`[LinkedIn API] ✅ Viewed profile: ${publicId}`);
-  return { success: true, data };
+  throw new Error('All profile view endpoints failed');
 }
 
 /**
