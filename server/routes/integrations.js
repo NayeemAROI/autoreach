@@ -4,28 +4,46 @@ const authenticate = require('../middleware/auth');
 const linkedinApi = require('../services/linkedinApi');
 const { logAction } = require('../services/auditLog');
 
-// GET /api/integrations/status - Check LinkedIn connection status
-router.get('/status', authenticate, (req, res) => {
+// GET /api/integrations/status - Check LinkedIn connection status (Unipile + cookie fallback)
+router.get('/status', authenticate, async (req, res) => {
   try {
-    const cookie = linkedinApi.getCookie(req.user.id);
+    // Check Unipile first
+    const unipile = require('../services/unipileApi');
+    const configured = await unipile.isConfigured();
     
+    if (configured) {
+      const health = await unipile.healthCheck();
+      if (health.ok) {
+        return res.json({
+          connected: true,
+          connectedAt: new Date().toISOString(),
+          profileName: health.name || 'LinkedIn Profile',
+          profileUrl: '',
+          method: 'unipile',
+          accountId: health.accountId
+        });
+      }
+    }
+
+    // Fallback: check stored cookie
+    const cookie = linkedinApi.getCookie(req.user.id);
     if (cookie && cookie.valid) {
-      res.json({
+      return res.json({
         connected: true,
         connectedAt: cookie.connectedAt,
         profileName: cookie.profileName || 'LinkedIn Profile',
         profileUrl: cookie.profileUrl || '',
         method: 'cookie'
       });
-    } else {
-      res.json({
-        connected: false,
-        connectedAt: null,
-        profileName: '',
-        profileUrl: '',
-        method: null
-      });
     }
+
+    res.json({
+      connected: false,
+      connectedAt: null,
+      profileName: '',
+      profileUrl: '',
+      method: null
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
