@@ -105,7 +105,10 @@ export default function Integrations() {
         setPassword('')
         fetchStatus()
       } else {
-        setMessage({ type: 'error', text: data.error || 'Verification failed.' })
+        // Checkpoint expired or failed — go back to login
+        setMessage({ type: 'error', text: (data.error || 'Verification failed.') + ' Please login again.' })
+        setCheckpoint(null)
+        setOtpCode('')
       }
     } catch (err) {
       setMessage({ type: 'error', text: 'Network error during verification.' })
