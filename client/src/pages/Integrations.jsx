@@ -215,11 +215,20 @@ export default function Integrations() {
               <p className="text-xs text-text-muted">{status?.method === 'unipile' ? 'Connected via Unipile API' : 'Secure server-side connection'}</p>
             </div>
           </div>
-          <div className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
-            isConnected ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
-          }`}>
-            {isConnected ? <ShieldCheck className="w-3.5 h-3.5" /> : <ShieldAlert className="w-3.5 h-3.5" />}
-            {isConnected ? 'Connected' : 'Not Connected'}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setLoading(true); fetchStatus() }}
+              className="p-1.5 rounded-lg hover:bg-bg-secondary transition-colors text-text-muted hover:text-text-primary"
+              title="Refresh connection status"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+            <div className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
+              isConnected ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
+            }`}>
+              {isConnected ? <ShieldCheck className="w-3.5 h-3.5" /> : <ShieldAlert className="w-3.5 h-3.5" />}
+              {isConnected ? 'Connected' : 'Not Connected'}
+            </div>
           </div>
         </div>
 

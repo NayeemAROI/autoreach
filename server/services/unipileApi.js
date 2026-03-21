@@ -189,8 +189,7 @@ async function listAccounts() {
  */
 async function isConfigured() {
   const apiKey = getApiKey();
-  const accountId = getAccountId();
-  return !!(apiKey && accountId);
+  return !!apiKey;
 }
 
 async function healthCheck() {
