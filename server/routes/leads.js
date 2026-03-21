@@ -142,7 +142,7 @@ router.post('/', (req, res) => {
 });
 
 // POST bulk import
-router.post('/import', (req, res) => {
+router.post('/import', async (req, res) => {
   const { leads } = req.body;
   const userId = req.user.id;
   const wsId = getWorkspaceId(userId);
@@ -154,24 +154,28 @@ router.post('/import', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
-  const checkExisting = db.prepare(`
-    SELECT id FROM leads 
-    WHERE user_id = ? AND firstName = ? AND lastName = ? AND company = ?
-  `);
+  // Check duplicates by LinkedIn URL (primary) or name+company (fallback)
+  const checkByUrl = db.prepare('SELECT id FROM leads WHERE user_id = ? AND linkedinUrl = ?');
+  const checkByName = db.prepare('SELECT id FROM leads WHERE user_id = ? AND firstName = ? AND lastName = ? AND company = ?');
 
+  const importedIds = [];
   const insertMany = db.transaction((items) => {
     let importedCount = 0;
     let skippedCount = 0;
 
     for (const l of items) {
-      // Check for exact duplicates
-      const existing = checkExisting.get(userId, l.firstName, l.lastName, l.company || '');
-      if (existing) {
-        skippedCount++;
-        continue;
+      // Check for duplicates
+      if (l.linkedinUrl) {
+        const existing = checkByUrl.get(userId, l.linkedinUrl);
+        if (existing) { skippedCount++; continue; }
+      } else if (l.firstName && l.lastName) {
+        const existing = checkByName.get(userId, l.firstName, l.lastName, l.company || '');
+        if (existing) { skippedCount++; continue; }
       }
 
-      insert.run(uuidv4(), userId, wsId, l.firstName, l.lastName, l.title || '', l.company || '', l.linkedinUrl || '', l.email || '', l.phone || '', JSON.stringify(l.tags || []), 'csv_import');
+      const id = uuidv4();
+      insert.run(id, userId, wsId, l.firstName || '', l.lastName || '', l.title || '', l.company || '', l.linkedinUrl || '', l.email || '', l.phone || '', JSON.stringify(l.tags || []), 'csv_import');
+      importedIds.push(id);
       importedCount++;
     }
     return { importedCount, skippedCount };
@@ -180,7 +184,27 @@ router.post('/import', (req, res) => {
   try {
     const { importedCount, skippedCount } = insertMany(leads);
     logAction(req, 'lead.bulk_import', 'lead', '', '', { imported: importedCount, skipped: skippedCount, total: leads.length });
-    res.json({ imported: importedCount, skipped: skippedCount });
+
+    // Auto-enrich imported leads that have LinkedIn URL but missing name
+    if (importedIds.length > 0) {
+      setImmediate(async () => {
+        try {
+          const unipile = require('../services/unipileApi');
+          for (const leadId of importedIds) {
+            try {
+              const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+              if (lead?.linkedinUrl && (!lead.firstName || lead.firstName === 'LinkedIn')) {
+                const profile = await unipile.getUserFullProfile(lead.linkedinUrl);
+                db.prepare(`UPDATE leads SET firstName = COALESCE(NULLIF(?, ''), firstName), lastName = COALESCE(NULLIF(?, ''), lastName), company = COALESCE(NULLIF(?, ''), company), title = COALESCE(NULLIF(?, ''), title), updatedAt = datetime('now') WHERE id = ?`)
+                  .run(profile.firstName, profile.lastName, profile.company, profile.title, leadId);
+              }
+            } catch {}
+          }
+        } catch {}
+      });
+    }
+
+    res.json({ imported: importedCount, skipped: skippedCount, enriching: importedIds.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

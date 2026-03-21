@@ -325,23 +325,12 @@ export default function Leads() {
           if(fileInputRef.current) fileInputRef.current.value = ''
           return
         }
-        // Validate Required Columns
+        // Validate Required Columns — only LinkedIn URL is mandatory
         const headers = results.meta.fields.map(h => (h || '').trim().toLowerCase())
-        const hasFirstName = headers.some(h => ['first name', 'firstname', 'first'].includes(h))
-        const hasLastName = headers.some(h => ['last name', 'lastname', 'last'].includes(h))
-        const hasUrl = headers.some(h => ['linkedin url', 'linkedin', 'url'].includes(h))
-        const hasCompany = headers.some(h => ['company name', 'company'].includes(h))
-        const hasTitle = headers.some(h => ['title', 'titles', 'job title'].includes(h))
+        const hasUrl = headers.some(h => ['linkedin url', 'linkedin', 'url', 'profile url', 'linkedin profile'].includes(h))
 
-        const missing = []
-        if (!hasFirstName) missing.push('First Name')
-        if (!hasLastName) missing.push('Last Name')
-        if (!hasUrl) missing.push('LinkedIn URL')
-        if (!hasCompany) missing.push('Company Name')
-        if (!hasTitle) missing.push('Title')
-
-        if (missing.length > 0) {
-          setImportError(`Import failed. The CSV is missing required columns: ${missing.join(', ')}. Please rename or add these columns to your file and try again.`)
+        if (!hasUrl) {
+          setImportError('Import failed. CSV must have a "LinkedIn URL" column. Other columns (First Name, Last Name, Company, Title) are optional and will be auto-enriched.')
           setImportingInfo(null)
           if(fileInputRef.current) fileInputRef.current.value = ''
           return

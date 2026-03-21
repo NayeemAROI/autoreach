@@ -26,16 +26,19 @@ function getApiKey() {
   }
 }
 
-function getAccountId() {
-  // Check database first (has latest from login)
+function getAccountId(wsId) {
+  // Check database first — workspace-scoped
+  if (wsId) {
+    try {
+      const setting = db.prepare("SELECT value FROM settings WHERE key = ?").get(`unipile_account_id:${wsId}`);
+      if (setting?.value) return setting.value;
+    } catch {}
+  }
+  // Fallback: global key (legacy)
   try {
     const setting = db.prepare("SELECT value FROM settings WHERE key = 'unipile_account_id'").get();
     if (setting?.value) return setting.value;
   } catch {}
-  
-  // Fall back to env var
-  const envId = process.env.UNIPILE_ACCOUNT_ID || '';
-  if (envId) return envId;
   
   return '';
 }
@@ -43,19 +46,21 @@ function getAccountId() {
 /**
  * Get account ID with dynamic fallback — fetches from Unipile if not stored
  */
-async function getAccountIdDynamic() {
-  const stored = getAccountId();
+async function getAccountIdDynamic(wsId) {
+  const stored = getAccountId(wsId);
   if (stored) return stored;
   
-  // Try to get from Unipile accounts list
-  try {
-    const accounts = await unipileFetch('/accounts');
-    const linkedin = (accounts.items || []).find(a => a.type === 'LINKEDIN');
-    if (linkedin?.id) {
-      setAccountId(linkedin.id);
-      return linkedin.id;
-    }
-  } catch {}
+  // Only fetch from Unipile if no workspace specified (legacy fallback)
+  if (!wsId) {
+    try {
+      const accounts = await unipileFetch('/accounts');
+      const linkedin = (accounts.items || []).find(a => a.type === 'LINKEDIN');
+      if (linkedin?.id) {
+        setAccountId(linkedin.id);
+        return linkedin.id;
+      }
+    } catch {}
+  }
   
   return '';
 }
@@ -99,8 +104,8 @@ async function unipileFetch(endpoint, options = {}) {
 /**
  * Get user profile by LinkedIn public identifier (e.g., "john-doe")
  */
-async function getUserProfile(publicIdentifier) {
-  const accountId = await getAccountIdDynamic();
+async function getUserProfile(publicIdentifier, wsId) {
+  const accountId = await getAccountIdDynamic(wsId);
   if (!accountId) throw new Error('Unipile account ID not configured');
 
   const profile = await unipileFetch(`/users/${encodeURIComponent(publicIdentifier)}?account_id=${accountId}`);
@@ -111,8 +116,8 @@ async function getUserProfile(publicIdentifier) {
 /**
  * Send a connection request (invite) to a LinkedIn user
  */
-async function sendInvite(publicIdentifier, message = '') {
-  const accountId = await getAccountIdDynamic();
+async function sendInvite(publicIdentifier, message = '', wsId) {
+  const accountId = await getAccountIdDynamic(wsId);
   if (!accountId) throw new Error('Unipile account ID not configured');
 
   // First get the provider_id from the public identifier
@@ -187,13 +192,36 @@ async function listAccounts() {
 /**
  * Check if Unipile is configured and working
  */
-async function isConfigured() {
+async function isConfigured(wsId) {
   const apiKey = getApiKey();
-  return !!apiKey;
+  if (!apiKey) return false;
+  // If workspace specified, check if that workspace has an account
+  if (wsId) {
+    const accountId = getAccountId(wsId);
+    return !!accountId;
+  }
+  return true;
 }
 
-async function healthCheck() {
+async function healthCheck(wsId) {
   try {
+    // If workspace-scoped, check specific account
+    const accountId = wsId ? getAccountId(wsId) : '';
+    if (wsId && !accountId) return { ok: false, error: 'No LinkedIn account connected for this workspace' };
+    
+    if (accountId) {
+      // Check specific account status
+      try {
+        const data = await unipileFetch(`/accounts/${accountId}`);
+        const source = (data.sources || []).find(s => s.status === 'OK');
+        if (!source) return { ok: false, error: 'LinkedIn account not active' };
+        return { ok: true, accountId: data.id, name: data.name };
+      } catch {
+        return { ok: false, error: 'Account not found or expired' };
+      }
+    }
+    
+    // Global fallback: check any LinkedIn account
     const accounts = await listAccounts();
     const items = accounts.items || [];
     const linkedin = items.find(a => a.type === 'LINKEDIN');
@@ -344,16 +372,13 @@ async function solveCheckpoint(accountId, code) {
 /**
  * Store account ID for future use
  */
-function setAccountId(accountId) {
+function setAccountId(accountId, wsId) {
   try {
-    db.prepare(`INSERT OR REPLACE INTO settings (key, user_id, value) VALUES ('unipile_account_id', 'system', ?)`).run(accountId);
-    // Also set in env for current process
-    process.env.UNIPILE_ACCOUNT_ID = accountId;
-    logger.info(`[Unipile] Account ID saved: ${accountId}`);
+    const key = wsId ? `unipile_account_id:${wsId}` : 'unipile_account_id';
+    db.prepare(`INSERT OR REPLACE INTO settings (key, user_id, value) VALUES (?, 'system', ?)`).run(key, accountId);
+    logger.info(`[Unipile] Account ID saved: ${accountId} (workspace: ${wsId || 'global'})`);
   } catch (err) {
-    // Fallback: just set env var if DB fails
-    process.env.UNIPILE_ACCOUNT_ID = accountId;
-    logger.warn(`[Unipile] DB save failed, using env: ${err.message}`);
+    logger.warn(`[Unipile] DB save failed: ${err.message}`);
   }
 }
 

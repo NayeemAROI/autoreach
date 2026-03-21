@@ -2,17 +2,24 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/auth');
 const linkedinApi = require('../services/linkedinApi');
+const db = require('../db/database');
 const { logAction } = require('../services/auditLog');
 
-// GET /api/integrations/status - Check LinkedIn connection status (Unipile + cookie fallback)
+// Helper: get user's active workspace_id
+function getWsId(userId) {
+  const user = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(userId);
+  return user?.activeWorkspaceId || '';
+}
+
+// GET /api/integrations/status - Check LinkedIn connection status (workspace-scoped)
 router.get('/status', authenticate, async (req, res) => {
   try {
-    // Check Unipile first
+    const wsId = getWsId(req.user.id);
     const unipile = require('../services/unipileApi');
-    const configured = await unipile.isConfigured();
+    const configured = await unipile.isConfigured(wsId);
     
     if (configured) {
-      const health = await unipile.healthCheck();
+      const health = await unipile.healthCheck(wsId);
       if (health.ok) {
         return res.json({
           connected: true,
@@ -23,18 +30,6 @@ router.get('/status', authenticate, async (req, res) => {
           accountId: health.accountId
         });
       }
-    }
-
-    // Fallback: check stored cookie
-    const cookie = linkedinApi.getCookie(req.user.id);
-    if (cookie && cookie.valid) {
-      return res.json({
-        connected: true,
-        connectedAt: cookie.connectedAt,
-        profileName: cookie.profileName || 'LinkedIn Profile',
-        profileUrl: cookie.profileUrl || '',
-        method: 'cookie'
-      });
     }
 
     res.json({
@@ -57,13 +52,13 @@ router.post('/connect-linkedin', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
+    const wsId = getWsId(req.user.id);
     const unipile = require('../services/unipileApi');
-    console.log(`[Integrations] Connecting LinkedIn for user ${req.user.id} via Unipile...`);
+    console.log(`[Integrations] Connecting LinkedIn for workspace ${wsId}...`);
     
     const result = await unipile.connectLinkedIn(username, password);
 
     if (result.checkpoint) {
-      // 2FA/OTP required
       return res.json({
         checkpoint: true,
         accountId: result.accountId,
@@ -72,7 +67,11 @@ router.post('/connect-linkedin', authenticate, async (req, res) => {
       });
     }
 
-    // Success
+    // Save account ID for this workspace
+    if (result.accountId) {
+      unipile.setAccountId(result.accountId, wsId);
+    }
+
     logAction(req, 'integration.linkedin_connected', 'integration', '', result.name);
     res.json({
       success: true,
@@ -94,18 +93,23 @@ router.post('/solve-checkpoint', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Account ID and verification code are required.' });
     }
 
+    const wsId = getWsId(req.user.id);
     const unipile = require('../services/unipileApi');
     console.log(`[Integrations] Solving checkpoint for account ${accountId}...`);
     
     const result = await unipile.solveCheckpoint(accountId, code);
 
     if (result.checkpoint) {
-      // Another checkpoint needed
       return res.json({
         checkpoint: true,
         type: result.type,
         message: result.message,
       });
+    }
+
+    // Save account ID for this workspace
+    if (result.accountId) {
+      unipile.setAccountId(result.accountId, wsId);
     }
 
     logAction(req, 'integration.linkedin_connected', 'integration', '', 'LinkedIn');
@@ -128,12 +132,17 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
       return res.status(400).json({ error: 'Please provide a valid li_at cookie value.' });
     }
 
+    const wsId = getWsId(req.user.id);
     const trimmed = li_at.trim();
-    console.log(`[Integrations] Connecting via cookie for user ${req.user.id}...`);
+    console.log(`[Integrations] Connecting via cookie for workspace ${wsId}...`);
     
-    // Use Unipile to connect with cookie
     const unipile = require('../services/unipileApi');
     const result = await unipile.connectWithCookie(trimmed);
+
+    // Save account ID for this workspace
+    if (result.accountId) {
+      unipile.setAccountId(result.accountId, wsId);
+    }
 
     logAction(req, 'integration.linkedin_connected', 'integration', '', result.name);
     res.json({
@@ -148,19 +157,26 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/integrations/disconnect - Remove stored cookie AND Unipile account
+// POST /api/integrations/disconnect - Disconnect LinkedIn for this workspace
 router.post('/disconnect', authenticate, async (req, res) => {
   try {
-    // Disconnect from Unipile
-    try {
-      const unipile = require('../services/unipileApi');
-      await unipile.deleteAccount();
-    } catch (err) {
-      console.warn('[Integrations] Unipile disconnect warning:', err.message);
+    const wsId = getWsId(req.user.id);
+    const unipile = require('../services/unipileApi');
+    const accountId = unipile.getAccountId(wsId);
+    
+    if (accountId) {
+      try {
+        await unipile.deleteAccount(accountId, wsId);
+      } catch (err) {
+        console.warn('[Integrations] Unipile disconnect warning:', err.message);
+      }
     }
 
-    // Also clear local cookie
-    linkedinApi.disconnectCookie(req.user.id);
+    // Clear workspace-scoped account ID
+    try {
+      db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_account_id:${wsId}`);
+    } catch {}
+
     logAction(req, 'integration.linkedin_disconnected', 'integration');
     res.json({ success: true, message: 'LinkedIn disconnected.' });
   } catch (err) {
