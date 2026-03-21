@@ -309,14 +309,14 @@ async function solveCheckpoint(accountId, code) {
  */
 function setAccountId(accountId) {
   try {
-    // Ensure settings table exists
-    db.prepare(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`).run();
-    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('unipile_account_id', ?)`).run(accountId);
+    db.prepare(`INSERT OR REPLACE INTO settings (key, user_id, value) VALUES ('unipile_account_id', 'system', ?)`).run(accountId);
     // Also set in env for current process
     process.env.UNIPILE_ACCOUNT_ID = accountId;
     logger.info(`[Unipile] Account ID saved: ${accountId}`);
   } catch (err) {
-    logger.error(`[Unipile] Failed to save account ID: ${err.message}`);
+    // Fallback: just set env var if DB fails
+    process.env.UNIPILE_ACCOUNT_ID = accountId;
+    logger.warn(`[Unipile] DB save failed, using env: ${err.message}`);
   }
 }
 

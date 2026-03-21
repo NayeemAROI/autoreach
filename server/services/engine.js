@@ -124,8 +124,8 @@ jobQueue.register('linkedin_action', async (payload) => {
   } catch (err) {
     logger.error(`❌ Unipile action failed: ${actionType}`, { leadId, campaignId, error: err.message });
     
-    if (err.message.includes('rate limit') || err.message.includes('429')) {
-      throw err; // Let job queue retry
+    if (err.message.includes('rate limit') || err.message.includes('429') || err.message.includes('422') || err.message.includes('cannot_resend')) {
+      throw err; // Let job queue retry later
     } else {
       markLeadError({ campaign_id: campaignId, lead_id: leadId }, `Action ${actionType} failed: ${err.message}`);
     }
