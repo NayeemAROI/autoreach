@@ -134,6 +134,28 @@ jobQueue.register('linkedin_action', async (payload) => {
 
     logger.info(`⚡ Action completed: ${actionType}`, { leadId, campaignId });
 
+    // Advance lead to next step after successful action
+    if (payload.nodeId) {
+      try {
+        const campaign = db.prepare('SELECT sequence FROM campaigns WHERE id = ?').get(campaignId);
+        const sequence = JSON.parse(campaign?.sequence || '{}');
+        const tree = sequence;
+        const currentNode = tree.nodes?.[payload.nodeId];
+        if (currentNode) {
+          const leadState = db.prepare('SELECT * FROM campaign_leads WHERE campaign_id = ? AND lead_id = ?')
+            .get(campaignId, leadId);
+          if (leadState) {
+            advanceLeadTree(leadState, tree, currentNode, getRandomActionDelay(), {
+              userId, leadId, campaignId
+            });
+            logger.info(`📌 Lead ${leadId} advanced to next step after ${actionType}`);
+          }
+        }
+      } catch (advErr) {
+        logger.error(`⚠️ Failed to advance lead after action: ${advErr.message}`);
+      }
+    }
+
   } catch (err) {
     logger.error(`❌ Unipile action failed: ${actionType}`, { leadId, campaignId, error: err.message });
     
@@ -178,21 +200,21 @@ async function processLeadTree(leadState, tree, jobPayload) {
     const jitter = randomDelay(-2 * 60 * 60 * 1000, 2 * 60 * 60 * 1000); // +/- 2 hours
     advanceLeadTree(leadState, tree, currentNode, Math.max(baseDelayMs + jitter, 60000), jobPayload);
   } else if (['view_profile', 'send_invite', 'like_post', 'endorse', 'comment', 'send_message', 'withdraw_invite'].includes(currentNode.type)) {
-    // Queue the LinkedIn action
+    // Queue the LinkedIn action — DO NOT advance here, advance happens in linkedin_action handler on success
     jobQueue.addWithJitter('linkedin_action', {
       userId: leadState.user_id,
       leadId: leadState.lead_id,
       campaignId: leadState.campaign_id,
       actionType: currentNode.type,
-      config: currentNode.config
+      config: currentNode.config,
+      nodeId: nodeId, // Pass current node so handler can advance after success
     }, 0, 30000, { // 0-30s random start delay
       userId: leadState.user_id,
       campaignId: leadState.campaign_id,
       leadId: leadState.lead_id,
       maxAttempts: 3
     });
-    // Advance with randomized delay
-    advanceLeadTree(leadState, tree, currentNode, getRandomActionDelay(), jobPayload);
+    // Lead stays at current node until action completes
   } else {
     advanceLeadTree(leadState, tree, currentNode, getRandomActionDelay(), jobPayload);
   }
