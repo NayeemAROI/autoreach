@@ -16,6 +16,7 @@ import Analytics from './pages/Analytics'
 import ActivityLog from './pages/ActivityLog'
 import Profile from './pages/Profile'
 import WorkspaceMembers from './pages/WorkspaceMembers'
+import AdminPanel from './pages/AdminPanel'
 import WorkspaceSettings from './pages/WorkspaceSettings'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -127,6 +128,11 @@ function App() {
           <Route path="/workspace/settings" element={
             <ProtectedRoute>
               <DashboardLayout><WorkspaceSettings /></DashboardLayout>
+            </ProtectedRoute>
+          } />
+          <Route path="/admin" element={
+            <ProtectedRoute>
+              <DashboardLayout><AdminPanel /></DashboardLayout>
             </ProtectedRoute>
           } />
         </Routes>

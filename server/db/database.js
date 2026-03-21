@@ -554,7 +554,30 @@ try {
 
 // End of Create inbox tables
 
-// No seed data in production — users register through the app
-console.log('✅ Database initialized (clean, no seed data)');
+// Seed super admin account if not exists
+try {
+  const adminEmail = 'admin@autoreach.io';
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(adminEmail);
+  if (!existing) {
+    const adminId = uuidv4();
+    const hashedPw = bcrypt.hashSync('Admin@2026!', 10);
+    db.prepare('INSERT INTO users (id, name, email, password, is_verified, has_completed_onboarding) VALUES (?, ?, ?, ?, 1, 1)')
+      .run(adminId, 'Super Admin', adminEmail, hashedPw);
+    
+    // Create default workspace
+    const wsId = uuidv4();
+    try {
+      db.prepare('INSERT INTO workspaces (id, name, owner_id) VALUES (?, ?, ?)').run(wsId, 'Admin Workspace', adminId);
+      db.prepare('UPDATE users SET activeWorkspaceId = ? WHERE id = ?').run(wsId, adminId);
+      db.prepare('INSERT INTO workspace_members (id, workspace_id, user_id, role) VALUES (?, ?, ?, ?)').run(uuidv4(), wsId, adminId, 'owner');
+    } catch {}
+    
+    console.log('🔑 Super admin account created: admin@autoreach.io');
+  }
+} catch(e) {
+  console.warn('Admin seed warning:', e.message);
+}
+
+console.log('✅ Database initialized');
 
 module.exports = db;

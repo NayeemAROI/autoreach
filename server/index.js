@@ -96,6 +96,7 @@ app.use('/api/inbox', require('./routes/inbox'));
 app.use('/api/integrations', require('./routes/integrations'));
 app.use('/api/audit-log', require('./routes/auditLog'));
 app.use('/api/profile', require('./routes/profile'));
+app.use('/api/admin', require('./routes/admin'));
 
 // Initialize Lead Verifier
 const verifier = require('./services/leadVerifier');
