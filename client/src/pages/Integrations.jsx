@@ -291,6 +291,35 @@ export default function Integrations() {
                   )}
                 </button>
               </div>
+
+              <div className="flex items-center gap-2 mt-3">
+                <div className="flex-1 h-px bg-border"></div>
+                <span className="text-xs text-text-muted">or</span>
+                <div className="flex-1 h-px bg-border"></div>
+              </div>
+
+              <button
+                onClick={async () => {
+                  setSolvingOtp(true)
+                  setMessage({ type: 'info', text: 'Checking approval status...' })
+                  try {
+                    const res = await apiFetch('/api/integrations/status')
+                    const data = await res.json()
+                    if (data.connected) {
+                      setMessage({ type: 'success', text: 'LinkedIn connected!' })
+                      setCheckpoint(null)
+                      fetchStatus()
+                    } else {
+                      setMessage({ type: 'info', text: 'Not approved yet. Please approve on your phone and try again.' })
+                    }
+                  } catch { setMessage({ type: 'error', text: 'Network error.' }) }
+                  finally { setSolvingOtp(false) }
+                }}
+                disabled={solvingOtp}
+                className="w-full py-2 text-sm text-text-secondary hover:text-text-primary border border-border rounded-lg hover:border-primary/50 transition-colors flex items-center justify-center gap-2"
+              >
+                📱 I approved on my phone
+              </button>
             </div>
             <div className="flex items-center gap-3 mt-2">
               <button
