@@ -279,6 +279,7 @@ export default function Integrations() {
                   autoFocus
                 />
                 <button
+                  data-verify-btn
                   onClick={handleSolveCheckpoint}
                   disabled={solvingOtp || !otpCode.trim()}
                   className="btn btn-primary px-5 flex items-center gap-2 disabled:opacity-50"
@@ -291,12 +292,44 @@ export default function Integrations() {
                 </button>
               </div>
             </div>
-            <button
-              onClick={() => { setCheckpoint(null); setMessage(null) }}
-              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
-            >
-              ← Back to login
-            </button>
+            <div className="flex items-center gap-3 mt-2">
+              <button
+                onClick={async () => {
+                  setSolvingOtp(true)
+                  setMessage(null)
+                  try {
+                    const res = await apiFetch('/api/integrations/solve-checkpoint', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ accountId: checkpoint.accountId, code: 'TRY_ANOTHER_WAY' })
+                    })
+                    const data = await res.json()
+                    if (data.checkpoint) {
+                      setCheckpoint(prev => ({ ...prev, type: data.type, message: data.message }))
+                      setMessage({ type: 'info', text: data.message || 'Check your email for a verification code.' })
+                    } else if (data.success) {
+                      setMessage({ type: 'success', text: 'Connected!' })
+                      setCheckpoint(null)
+                      fetchStatus()
+                    } else {
+                      setMessage({ type: 'error', text: data.error || 'Failed to switch method.' })
+                    }
+                  } catch { setMessage({ type: 'error', text: 'Network error.' }) }
+                  finally { setSolvingOtp(false) }
+                }}
+                disabled={solvingOtp}
+                className="text-xs text-primary hover:text-primary-light transition-colors flex items-center gap-1"
+              >
+                <Mail className="w-3.5 h-3.5" /> Try another way (email)
+              </button>
+              <span className="text-border">|</span>
+              <button
+                onClick={() => { setCheckpoint(null); setMessage(null) }}
+                className="text-xs text-text-muted hover:text-text-secondary transition-colors"
+              >
+                ← Back to login
+              </button>
+            </div>
           </div>
         ) : (
           /* Login Form */
