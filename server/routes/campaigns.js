@@ -520,19 +520,30 @@ router.patch('/:id', (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// POST retry failed leads
+// POST retry failed leads (resets error leads AND optionally all leads back to start)
 router.post('/:id/retry-failed', (req, res) => {
   const userId = req.user.id;
+  const { resetAll } = req.body || {};
   try {
     const campaign = db.prepare('SELECT id FROM campaigns WHERE id = ? AND user_id = ?').get(req.params.id, userId);
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
-    const result = db.prepare(`
-      UPDATE campaign_leads SET status = 'active', error_message = '', next_execution_at = datetime('now')
-      WHERE campaign_id = ? AND user_id = ? AND status = 'error'
-    `).run(req.params.id, userId);
-
-    res.json({ success: true, retried: result.changes, message: `${result.changes} failed lead(s) queued for retry.` });
+    let result;
+    if (resetAll) {
+      // Reset ALL non-completed leads back to start of sequence
+      result = db.prepare(`
+        UPDATE campaign_leads SET status = 'active', error_message = '', current_node_id = NULL, current_step_index = 0, next_execution_at = datetime('now')
+        WHERE campaign_id = ? AND user_id = ? AND status != 'completed'
+      `).run(req.params.id, userId);
+      res.json({ success: true, retried: result.changes, message: `${result.changes} lead(s) reset to start of sequence.` });
+    } else {
+      // Reset only error leads
+      result = db.prepare(`
+        UPDATE campaign_leads SET status = 'active', error_message = '', next_execution_at = datetime('now')
+        WHERE campaign_id = ? AND user_id = ? AND status = 'error'
+      `).run(req.params.id, userId);
+      res.json({ success: true, retried: result.changes, message: `${result.changes} failed lead(s) queued for retry.` });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

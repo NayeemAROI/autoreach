@@ -195,13 +195,19 @@ export default function CampaignDetails() {
     finally { setSaving(false) }
   }
 
-  const retryFailed = async () => {
+  const retryFailed = async (resetAll = false) => {
     try {
-      const res = await apiFetch(`/api/campaigns/${id}/retry-failed`, { method: 'POST' })
+      const res = await apiFetch(`/api/campaigns/${id}/retry-failed`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resetAll })
+      })
       const data = await res.json()
-      showToast(data.message || 'Failed leads retried')
+      showToast(data.message || 'Leads retried')
       if (activeTab === 'overview') loadAnalytics()
+      if (activeTab === 'leads') loadLeads()
       if (activeTab === 'logs') loadLogs()
+      if (activeTab === 'workflow') loadPipeline()
     } catch { showToast('Failed to retry', 'error') }
   }
 
@@ -299,8 +305,11 @@ export default function CampaignDetails() {
             <button onClick={() => navigate(`/campaigns/${id}/builder`)} className="btn btn-sm btn-secondary">
               <Workflow className="w-3.5 h-3.5" /> Edit Sequence
             </button>
-            <button onClick={retryFailed} className="btn btn-sm bg-primary/10 text-primary border-primary/20 hover:bg-primary/20">
+            <button onClick={() => retryFailed(false)} className="btn btn-sm bg-primary/10 text-primary border-primary/20 hover:bg-primary/20">
               <RefreshCw className="w-3.5 h-3.5" /> Retry Failed
+            </button>
+            <button onClick={() => retryFailed(true)} className="btn btn-sm bg-warning/10 text-warning border-warning/20 hover:bg-warning/20" title="Reset all leads back to step 1">
+              <Archive className="w-3.5 h-3.5" /> Reset All
             </button>
             <button onClick={duplicateCampaign} className="btn btn-sm btn-secondary">
               <Copy className="w-3.5 h-3.5" /> Duplicate
