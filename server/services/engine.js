@@ -134,6 +134,20 @@ jobQueue.register('linkedin_action', async (payload) => {
 
     logger.info(`⚡ Action completed: ${actionType}`, { leadId, campaignId });
 
+    // Update lead workflow status (shown on Leads page)
+    try {
+      const statusMap = {
+        'send_invite': 'invited', 'connect': 'invited', 'linkedin_connect': 'invited',
+        'send_message': 'replied', 'message': 'replied', 'linkedin_message': 'replied',
+        'view_profile': 'viewed', 'view': 'viewed', 'visit': 'viewed',
+        'like_post': 'liked', 'endorse': 'endorsed',
+      };
+      const newStatus = statusMap[actionType];
+      if (newStatus) {
+        db.prepare('UPDATE leads SET status = ? WHERE id = ?').run(newStatus, leadId);
+      }
+    } catch {}
+
     // Advance lead to next step after successful action
     if (payload.nodeId) {
       try {
