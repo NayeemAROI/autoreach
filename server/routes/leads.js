@@ -135,6 +135,13 @@ router.post('/', (req, res) => {
     const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
     lead.tags = JSON.parse(lead.tags || '[]');
     logAction(req, 'lead.created', 'lead', id, `${firstName} ${lastName}`, { company, source: source || 'manual' });
+
+    // Auto-verify
+    try {
+      const verifier = require('../services/leadVerifier');
+      verifier.enqueueLeads([id], userId);
+    } catch {}
+
     res.status(201).json(lead);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -193,15 +200,27 @@ router.post('/import', async (req, res) => {
           for (const leadId of importedIds) {
             try {
               const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
-              if (lead?.linkedinUrl && (!lead.firstName || lead.firstName === 'LinkedIn')) {
+              if (lead?.linkedinUrl) {
                 const profile = await unipile.getUserFullProfile(lead.linkedinUrl);
-                db.prepare(`UPDATE leads SET firstName = COALESCE(NULLIF(?, ''), firstName), lastName = COALESCE(NULLIF(?, ''), lastName), company = COALESCE(NULLIF(?, ''), company), title = COALESCE(NULLIF(?, ''), title), updatedAt = datetime('now') WHERE id = ?`)
-                  .run(profile.firstName, profile.lastName, profile.company, profile.title, leadId);
+                db.prepare(`UPDATE leads SET 
+                  firstName = COALESCE(NULLIF(?, ''), firstName), 
+                  lastName = COALESCE(NULLIF(?, ''), lastName), 
+                  company = COALESCE(NULLIF(?, ''), company), 
+                  title = COALESCE(NULLIF(?, ''), title),
+                  avatar = COALESCE(NULLIF(?, ''), avatar),
+                  updatedAt = datetime('now') WHERE id = ?`)
+                  .run(profile.firstName, profile.lastName, profile.company, profile.title, profile.profilePicture || '', leadId);
               }
             } catch {}
           }
         } catch {}
       });
+
+      // Auto-verify leads
+      try {
+        const verifier = require('../services/leadVerifier');
+        verifier.enqueueLeads(importedIds, userId);
+      } catch {}
     }
 
     res.json({ imported: importedCount, skipped: skippedCount, enriching: importedIds.length });
@@ -357,16 +376,17 @@ router.post('/:id/enrich', async (req, res) => {
     const unipile = require('../services/unipileApi');
     const profile = await unipile.getUserFullProfile(lead.linkedinUrl);
 
-    // Update lead with enriched data
+    // Update lead with enriched data (including avatar)
     db.prepare(`
       UPDATE leads SET 
         firstName = COALESCE(NULLIF(?, ''), firstName),
         lastName = COALESCE(NULLIF(?, ''), lastName),
         company = COALESCE(NULLIF(?, ''), company),
         title = COALESCE(NULLIF(?, ''), title),
+        avatar = COALESCE(NULLIF(?, ''), avatar),
         updatedAt = datetime('now')
       WHERE id = ? AND user_id = ?
-    `).run(profile.firstName, profile.lastName, profile.company, profile.title, leadId, userId);
+    `).run(profile.firstName, profile.lastName, profile.company, profile.title, profile.profilePicture || '', leadId, userId);
 
     const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
     updated.tags = JSON.parse(updated.tags || '[]');

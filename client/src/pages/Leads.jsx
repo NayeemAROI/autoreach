@@ -656,7 +656,10 @@ export default function Leads() {
                       <td className="max-w-[200px]">
                         <div className="flex items-center gap-3">
                           <div className="relative">
-                            <div className="w-10 h-10 flex-shrink-0 rounded-full bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center font-bold text-primary-light text-sm border border-primary/20 shadow-sm">
+                            {lead.avatar ? (
+                              <img src={lead.avatar} alt="" className="w-10 h-10 flex-shrink-0 rounded-full object-cover border border-primary/20 shadow-sm" onError={(e) => { e.target.style.display='none'; e.target.nextSibling.style.display='flex'; }} />
+                            ) : null}
+                            <div className={`w-10 h-10 flex-shrink-0 rounded-full bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center font-bold text-primary-light text-sm border border-primary/20 shadow-sm ${lead.avatar ? 'hidden' : ''}`}>
                               {lead.firstName?.[0] || '?'}{lead.lastName?.[0] || ''}
                             </div>
                             {isVerified && (
