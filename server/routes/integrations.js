@@ -49,6 +49,77 @@ router.get('/status', authenticate, async (req, res) => {
   }
 });
 
+// POST /api/integrations/connect-linkedin - Login with LinkedIn credentials via Unipile
+router.post('/connect-linkedin', authenticate, async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Email and password are required.' });
+    }
+
+    const unipile = require('../services/unipileApi');
+    console.log(`[Integrations] Connecting LinkedIn for user ${req.user.id} via Unipile...`);
+    
+    const result = await unipile.connectLinkedIn(username, password);
+
+    if (result.checkpoint) {
+      // 2FA/OTP required
+      return res.json({
+        checkpoint: true,
+        accountId: result.accountId,
+        type: result.type,
+        message: result.message,
+      });
+    }
+
+    // Success
+    logAction(req, 'integration.linkedin_connected', 'integration', '', result.name);
+    res.json({
+      success: true,
+      profileName: result.name,
+      accountId: result.accountId,
+      message: `Connected as ${result.name}!`
+    });
+  } catch (err) {
+    console.error('[Integrations] LinkedIn connect error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/integrations/solve-checkpoint - Submit 2FA/OTP code
+router.post('/solve-checkpoint', authenticate, async (req, res) => {
+  try {
+    const { accountId, code } = req.body;
+    if (!accountId || !code) {
+      return res.status(400).json({ error: 'Account ID and verification code are required.' });
+    }
+
+    const unipile = require('../services/unipileApi');
+    console.log(`[Integrations] Solving checkpoint for account ${accountId}...`);
+    
+    const result = await unipile.solveCheckpoint(accountId, code);
+
+    if (result.checkpoint) {
+      // Another checkpoint needed
+      return res.json({
+        checkpoint: true,
+        type: result.type,
+        message: result.message,
+      });
+    }
+
+    logAction(req, 'integration.linkedin_connected', 'integration', '', 'LinkedIn');
+    res.json({
+      success: true,
+      accountId: result.accountId,
+      message: 'LinkedIn connected successfully!'
+    });
+  } catch (err) {
+    console.error('[Integrations] Checkpoint error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // POST /api/integrations/connect-cookie - Save & validate a li_at cookie
 router.post('/connect-cookie', authenticate, async (req, res) => {
   try {

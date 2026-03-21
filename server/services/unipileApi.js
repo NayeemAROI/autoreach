@@ -188,6 +188,117 @@ async function healthCheck() {
   }
 }
 
+/**
+ * Connect a LinkedIn account using email/password via Unipile
+ * Returns: { success, accountId } or { checkpoint, accountId, type }
+ */
+async function connectLinkedIn(username, password) {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('Unipile API key not configured');
+
+  const url = `${UNIPILE_BASE}/accounts`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'X-API-KEY': apiKey,
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      provider: 'LINKEDIN',
+      username: username,
+      password: password,
+    }),
+  });
+
+  const data = await res.json();
+  
+  // Check if checkpoint required (2FA, CAPTCHA, etc.)
+  if (res.status === 202 || data.checkpoint || data.object === 'Checkpoint') {
+    logger.info(`[Unipile] LinkedIn login requires checkpoint: ${data.checkpoint?.type || data.type || 'unknown'}`);
+    return {
+      checkpoint: true,
+      accountId: data.account_id || data.id || '',
+      type: data.checkpoint?.type || data.type || '2FA',
+      message: data.checkpoint?.message || data.message || 'LinkedIn requires verification',
+    };
+  }
+
+  if (!res.ok) {
+    const errMsg = data.error || data.message || `Login failed (${res.status})`;
+    throw new Error(errMsg);
+  }
+
+  // Success — store account ID
+  const accountId = data.id || data.account_id || '';
+  if (accountId) {
+    setAccountId(accountId);
+  }
+
+  logger.info(`[Unipile] ✅ LinkedIn connected: ${data.name || username} (${accountId})`);
+  return {
+    success: true,
+    accountId,
+    name: data.name || username,
+  };
+}
+
+/**
+ * Solve a LinkedIn checkpoint (2FA code, OTP, CAPTCHA)
+ */
+async function solveCheckpoint(accountId, code) {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('Unipile API key not configured');
+
+  const url = `${UNIPILE_BASE}/accounts/${encodeURIComponent(accountId)}/checkpoint`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'X-API-KEY': apiKey,
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ code }),
+  });
+
+  const data = await res.json();
+
+  // Another checkpoint may follow
+  if (res.status === 202 || data.checkpoint || data.object === 'Checkpoint') {
+    return {
+      checkpoint: true,
+      type: data.checkpoint?.type || data.type || '2FA',
+      message: data.checkpoint?.message || data.message || 'Additional verification required',
+    };
+  }
+
+  if (!res.ok) {
+    throw new Error(data.error || data.message || `Checkpoint failed (${res.status})`);
+  }
+
+  // Store account ID on success
+  setAccountId(accountId);
+  logger.info(`[Unipile] ✅ Checkpoint solved, account ${accountId} connected`);
+  
+  return { success: true, accountId };
+}
+
+/**
+ * Store account ID for future use
+ */
+function setAccountId(accountId) {
+  try {
+    // Ensure settings table exists
+    db.prepare(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`).run();
+    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('unipile_account_id', ?)`).run(accountId);
+    // Also set in env for current process
+    process.env.UNIPILE_ACCOUNT_ID = accountId;
+    logger.info(`[Unipile] Account ID saved: ${accountId}`);
+  } catch (err) {
+    logger.error(`[Unipile] Failed to save account ID: ${err.message}`);
+  }
+}
+
 module.exports = {
   getUserProfile,
   sendInvite,
@@ -198,4 +309,7 @@ module.exports = {
   healthCheck,
   getApiKey,
   getAccountId,
+  connectLinkedIn,
+  solveCheckpoint,
+  setAccountId,
 };

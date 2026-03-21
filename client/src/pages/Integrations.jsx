@@ -1,15 +1,26 @@
 import { useState, useEffect } from 'react'
-import { ShieldCheck, ShieldAlert, Key, RefreshCw, Unplug, CheckCircle2, AlertCircle, Loader2, MessageSquare, HelpCircle } from 'lucide-react'
+import { ShieldCheck, ShieldAlert, Key, RefreshCw, Unplug, CheckCircle2, AlertCircle, Loader2, MessageSquare, HelpCircle, Mail, Lock, Shield } from 'lucide-react'
 import { apiFetch } from '../utils/api'
 
 export default function Integrations() {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [cookieInput, setCookieInput] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [syncing, setSyncing] = useState(false)
-  const [message, setMessage] = useState(null) // { type: 'success'|'error', text: '' }
-  const [showHelp, setShowHelp] = useState(false)
+  const [message, setMessage] = useState(null)
+
+  // LinkedIn login form
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+
+  // 2FA / Checkpoint
+  const [checkpoint, setCheckpoint] = useState(null) // { accountId, type, message }
+  const [otpCode, setOtpCode] = useState('')
+  const [solvingOtp, setSolvingOtp] = useState(false)
+
+  // Cookie fallback
+  const [showCookieInput, setShowCookieInput] = useState(false)
+  const [cookieInput, setCookieInput] = useState('')
 
   const fetchStatus = async () => {
     try {
@@ -31,11 +42,80 @@ export default function Integrations() {
     return () => clearInterval(interval)
   }, [])
 
-  const handleConnect = async () => {
-    if (!cookieInput.trim()) {
-      setMessage({ type: 'error', text: 'Please paste your li_at cookie value.' })
+  const handleLinkedInLogin = async () => {
+    if (!email.trim() || !password.trim()) {
+      setMessage({ type: 'error', text: 'Please enter your LinkedIn email and password.' })
       return
     }
+    setConnecting(true)
+    setMessage(null)
+    setCheckpoint(null)
+    try {
+      const res = await apiFetch('/api/integrations/connect-linkedin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: email.trim(), password: password.trim() })
+      })
+      const data = await res.json()
+      
+      if (data.checkpoint) {
+        // 2FA required
+        setCheckpoint({ accountId: data.accountId, type: data.type, message: data.message })
+        setMessage({ type: 'info', text: data.message || 'LinkedIn requires verification. Please enter the code.' })
+      } else if (res.ok && data.success) {
+        setMessage({ type: 'success', text: data.message })
+        setEmail('')
+        setPassword('')
+        fetchStatus()
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Login failed.' })
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Network error. Is the server running?' })
+    } finally {
+      setConnecting(false)
+    }
+  }
+
+  const handleSolveCheckpoint = async () => {
+    if (!otpCode.trim()) {
+      setMessage({ type: 'error', text: 'Please enter the verification code.' })
+      return
+    }
+    setSolvingOtp(true)
+    setMessage(null)
+    try {
+      const res = await apiFetch('/api/integrations/solve-checkpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId: checkpoint.accountId, code: otpCode.trim() })
+      })
+      const data = await res.json()
+
+      if (data.checkpoint) {
+        // More verification needed
+        setCheckpoint(prev => ({ ...prev, type: data.type, message: data.message }))
+        setMessage({ type: 'info', text: data.message || 'Additional verification required.' })
+        setOtpCode('')
+      } else if (res.ok && data.success) {
+        setMessage({ type: 'success', text: data.message || 'LinkedIn connected!' })
+        setCheckpoint(null)
+        setOtpCode('')
+        setEmail('')
+        setPassword('')
+        fetchStatus()
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Verification failed.' })
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Network error during verification.' })
+    } finally {
+      setSolvingOtp(false)
+    }
+  }
+
+  const handleCookieConnect = async () => {
+    if (!cookieInput.trim()) return
     setConnecting(true)
     setMessage(null)
     try {
@@ -53,7 +133,7 @@ export default function Integrations() {
         setMessage({ type: 'error', text: data.error || 'Connection failed.' })
       }
     } catch (err) {
-      setMessage({ type: 'error', text: 'Network error. Is the server running?' })
+      setMessage({ type: 'error', text: 'Network error.' })
     } finally {
       setConnecting(false)
     }
@@ -79,7 +159,6 @@ export default function Integrations() {
         setMessage({ type: 'success', text: data.message })
       } else {
         setMessage({ type: 'error', text: data.error || 'Sync failed.' })
-        if (res.status === 401) fetchStatus() // Cookie expired, refresh status
       }
     } catch (err) {
       setMessage({ type: 'error', text: 'Network error during sync.' })
@@ -108,9 +187,13 @@ export default function Integrations() {
       {/* Status Message */}
       {message && (
         <div className={`flex items-start gap-3 p-4 rounded-lg border ${
-          message.type === 'success' ? 'bg-success/5 border-success/30 text-success' : 'bg-error/5 border-error/30 text-error'
+          message.type === 'success' ? 'bg-success/5 border-success/30 text-success' 
+          : message.type === 'info' ? 'bg-primary/5 border-primary/30 text-primary'
+          : 'bg-error/5 border-error/30 text-error'
         }`}>
-          {message.type === 'success' ? <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" /> : <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />}
+          {message.type === 'success' ? <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" /> 
+           : message.type === 'info' ? <Shield className="w-5 h-5 shrink-0 mt-0.5" />
+           : <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />}
           <span className="text-sm">{message.text}</span>
         </div>
       )}
@@ -126,7 +209,7 @@ export default function Integrations() {
             </div>
             <div>
               <h2 className="text-lg font-bold text-text-primary">LinkedIn Account</h2>
-              <p className="text-xs text-text-muted">{status?.method === 'unipile' ? 'Connected via Unipile API' : 'Server-side connection'}</p>
+              <p className="text-xs text-text-muted">{status?.method === 'unipile' ? 'Connected via Unipile API' : 'Secure server-side connection'}</p>
             </div>
           </div>
           <div className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
@@ -175,63 +258,135 @@ export default function Integrations() {
               </button>
             </div>
           </div>
-        ) : (
-          /* Cookie Input State */
+        ) : checkpoint ? (
+          /* 2FA / Checkpoint State */
           <div className="space-y-4">
-            <div className="p-4 bg-bg-secondary rounded-lg border border-border/50">
-              <label className="block text-sm font-semibold text-text-primary mb-2">
-                <Key className="w-4 h-4 inline mr-1.5 text-primary" />
-                LinkedIn Session Cookie (li_at)
-              </label>
+            <div className="p-4 bg-primary/5 rounded-lg border border-primary/20">
+              <div className="flex items-center gap-2 mb-3">
+                <Shield className="w-5 h-5 text-primary" />
+                <span className="text-sm font-semibold text-text-primary">Verification Required</span>
+              </div>
+              <p className="text-sm text-text-secondary mb-4">{checkpoint.message || 'LinkedIn sent a verification code. Please enter it below.'}</p>
+              
               <div className="flex gap-2">
                 <input
-                  type="password"
-                  placeholder="Paste your li_at cookie value here..."
-                  value={cookieInput}
-                  onChange={(e) => setCookieInput(e.target.value)}
-                  className="flex-1 px-3 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary transition-colors"
+                  type="text"
+                  placeholder="Enter verification code..."
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSolveCheckpoint()}
+                  className="flex-1 px-3 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary transition-colors text-center tracking-widest font-mono text-lg"
+                  autoFocus
                 />
                 <button
-                  onClick={handleConnect}
-                  disabled={connecting || !cookieInput.trim()}
+                  onClick={handleSolveCheckpoint}
+                  disabled={solvingOtp || !otpCode.trim()}
                   className="btn btn-primary px-5 flex items-center gap-2 disabled:opacity-50"
                 >
-                  {connecting ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Validating...</>
+                  {solvingOtp ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /> Verifying...</>
                   ) : (
-                    'Connect'
+                    'Verify'
                   )}
                 </button>
               </div>
             </div>
-
-            {/* How-to guide */}
             <button
-              onClick={() => setShowHelp(!showHelp)}
-              className="flex items-center gap-2 text-sm text-primary hover:text-primary-light transition-colors"
+              onClick={() => { setCheckpoint(null); setMessage(null) }}
+              className="text-xs text-text-muted hover:text-text-secondary transition-colors"
             >
-              <HelpCircle className="w-4 h-4" /> 
-              {showHelp ? 'Hide instructions' : 'How to get your li_at cookie'}
+              ← Back to login
+            </button>
+          </div>
+        ) : (
+          /* Login Form */
+          <div className="space-y-4">
+            <div className="p-4 bg-bg-secondary rounded-lg border border-border/50 space-y-3">
+              <p className="text-xs text-text-muted mb-1">Sign in with your LinkedIn credentials</p>
+              
+              <div className="relative">
+                <Mail className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                <input
+                  type="email"
+                  placeholder="LinkedIn email address"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary transition-colors"
+                />
+              </div>
+              
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                <input
+                  type="password"
+                  placeholder="LinkedIn password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleLinkedInLogin()}
+                  className="w-full pl-10 pr-3 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary transition-colors"
+                />
+              </div>
+
+              <button
+                onClick={handleLinkedInLogin}
+                disabled={connecting || !email.trim() || !password.trim()}
+                className="w-full btn btn-primary py-2.5 flex justify-center items-center gap-2 disabled:opacity-50"
+              >
+                {connecting ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Connecting...</>
+                ) : (
+                  <><ShieldCheck className="w-4 h-4" /> Connect LinkedIn</>
+                )}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 px-1">
+              <div className="flex-1 h-px bg-border"></div>
+              <span className="text-xs text-text-muted">or</span>
+              <div className="flex-1 h-px bg-border"></div>
+            </div>
+
+            <button
+              onClick={() => setShowCookieInput(!showCookieInput)}
+              className="flex items-center gap-2 text-sm text-text-muted hover:text-text-secondary transition-colors"
+            >
+              <Key className="w-4 h-4" />
+              {showCookieInput ? 'Hide cookie input' : 'Connect with li_at cookie instead'}
             </button>
 
-            {showHelp && (
-              <div className="p-4 bg-bg-secondary/50 rounded-lg border border-primary/20 space-y-3 text-sm text-text-secondary">
-                <p className="font-semibold text-text-primary">Follow these steps:</p>
-                <ol className="list-decimal list-inside space-y-2">
-                  <li>Open <strong>LinkedIn.com</strong> in Chrome and make sure you're logged in</li>
-                  <li>Press <kbd className="px-1.5 py-0.5 bg-bg-primary rounded border border-border text-xs font-mono">F12</kbd> to open DevTools</li>
-                  <li>Go to the <strong>Application</strong> tab (or <strong>Storage</strong> tab in Firefox)</li>
-                  <li>In the left sidebar, expand <strong>Cookies</strong> → click <strong>https://www.linkedin.com</strong></li>
-                  <li>Find the cookie named <strong>li_at</strong></li>
-                  <li>Double-click the <strong>Value</strong> column and copy it</li>
-                  <li>Paste it in the input above and click <strong>Connect</strong></li>
-                </ol>
-                <div className="mt-3 p-2.5 bg-warning/5 border border-warning/20 rounded-lg text-warning text-xs flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <span>Your cookie is stored securely on your local server only. It expires when you log out of LinkedIn or after ~1 year.</span>
+            {showCookieInput && (
+              <div className="p-4 bg-bg-secondary rounded-lg border border-border/50">
+                <label className="block text-sm font-semibold text-text-primary mb-2">
+                  <Key className="w-4 h-4 inline mr-1.5 text-primary" />
+                  LinkedIn Session Cookie (li_at)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    placeholder="Paste your li_at cookie value here..."
+                    value={cookieInput}
+                    onChange={(e) => setCookieInput(e.target.value)}
+                    className="flex-1 px-3 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary transition-colors"
+                  />
+                  <button
+                    onClick={handleCookieConnect}
+                    disabled={connecting || !cookieInput.trim()}
+                    className="btn btn-primary px-5 flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {connecting ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Validating...</>
+                    ) : (
+                      'Connect'
+                    )}
+                  </button>
                 </div>
               </div>
             )}
+
+            <div className="p-3 bg-bg-secondary/50 rounded-lg border border-border/30 text-xs text-text-muted flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-primary/60" />
+              <span>Your credentials are securely sent to the Unipile API for authentication. We never store your password.</span>
+            </div>
           </div>
         )}
       </div>
