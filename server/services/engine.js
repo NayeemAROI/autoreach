@@ -68,22 +68,22 @@ jobQueue.register('process_lead', async (payload, job) => {
   }
 });
 
-// Execute a LinkedIn action (server-side API — no extension needed)
+// Execute a LinkedIn action via Unipile API
 jobQueue.register('linkedin_action', async (payload) => {
   const { userId, leadId, campaignId, actionType, config } = payload;
 
-  const linkedinApi = require('./linkedinApi');
+  const unipile = require('./unipileApi');
   
-  // Check if user has a valid cookie
-  const cookie = linkedinApi.getCookie(userId);
-  if (!cookie || !cookie.valid) {
-    markLeadError({ campaign_id: campaignId, lead_id: leadId }, 'No valid LinkedIn cookie. Please reconnect.');
-    return;
-  }
-
   const lead = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
   if (!lead?.linkedinUrl) {
     markLeadError({ campaign_id: campaignId, lead_id: leadId }, 'Missing LinkedIn URL');
+    return;
+  }
+
+  // Extract public identifier from LinkedIn URL (e.g., "john-doe" from ".../in/john-doe/")
+  const publicId = lead.linkedinUrl.replace(/.*linkedin\.com\/in\//i, '').replace(/[/?#].*/, '');
+  if (!publicId) {
+    markLeadError({ campaign_id: campaignId, lead_id: leadId }, 'Invalid LinkedIn URL format');
     return;
   }
 
@@ -101,15 +101,13 @@ jobQueue.register('linkedin_action', async (payload) => {
   const message = personalize(config?.message || config?.note || '');
 
   try {
-    // Execute action via server-side LinkedIn API
-    if (['send_invite', 'connect'].includes(actionType)) {
-      await linkedinApi.sendConnectionRequest(userId, lead.linkedinUrl, message);
+    if (['send_invite', 'connect', 'linkedin_connect'].includes(actionType)) {
+      await unipile.sendInvite(publicId, message);
     } else if (['view_profile', 'view', 'visit'].includes(actionType)) {
-      await linkedinApi.viewProfile(userId, lead.linkedinUrl);
-    } else if (['send_message', 'message'].includes(actionType)) {
-      await linkedinApi.sendDirectMessage(userId, lead.linkedinUrl, message);
+      await unipile.viewProfile(publicId);
+    } else if (['send_message', 'message', 'linkedin_message'].includes(actionType)) {
+      await unipile.sendMessage(publicId, message);
     } else if (actionType === 'email') {
-      // Email actions handled separately
       logger.info(`📧 Email action for lead ${leadId} — skipping (not implemented via LinkedIn)`);
       return;
     } else {
@@ -119,19 +117,15 @@ jobQueue.register('linkedin_action', async (payload) => {
 
     // Log success
     db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(uuidv4(), userId, leadId, campaignId, `${actionType}_completed`, `Server-side ${actionType} success`);
+      .run(uuidv4(), userId, leadId, campaignId, `${actionType}_completed`, `Unipile ${actionType} success`);
 
     logger.info(`⚡ Action completed: ${actionType}`, { leadId, campaignId });
 
   } catch (err) {
-    logger.error(`❌ LinkedIn action failed: ${actionType}`, { leadId, campaignId, error: err.message });
+    logger.error(`❌ Unipile action failed: ${actionType}`, { leadId, campaignId, error: err.message });
     
-    if (err.message.includes('expired') || err.message.includes('cookie')) {
-      // Session expired — stop all actions for this user
-      markLeadError({ campaign_id: campaignId, lead_id: leadId }, `LinkedIn session expired: ${err.message}`);
-    } else if (err.message.includes('rate limit')) {
-      // Rate limited — retry later (job queue handles retries)
-      throw err;
+    if (err.message.includes('rate limit') || err.message.includes('429')) {
+      throw err; // Let job queue retry
     } else {
       markLeadError({ campaign_id: campaignId, lead_id: leadId }, `Action ${actionType} failed: ${err.message}`);
     }
