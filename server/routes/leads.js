@@ -320,6 +320,37 @@ router.post('/:id/verify', (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// POST enrich lead from LinkedIn profile via Unipile
+router.post('/:id/enrich', async (req, res) => {
+  const leadId = req.params.id;
+  const userId = req.user.id;
+
+  try {
+    const lead = db.prepare('SELECT * FROM leads WHERE id = ? AND user_id = ?').get(leadId, userId);
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+    if (!lead.linkedinUrl) return res.status(400).json({ error: 'Lead has no LinkedIn URL' });
+
+    const unipile = require('../services/unipileApi');
+    const profile = await unipile.getUserFullProfile(lead.linkedinUrl);
+
+    // Update lead with enriched data
+    db.prepare(`
+      UPDATE leads SET 
+        firstName = COALESCE(NULLIF(?, ''), firstName),
+        lastName = COALESCE(NULLIF(?, ''), lastName),
+        company = COALESCE(NULLIF(?, ''), company),
+        title = COALESCE(NULLIF(?, ''), title),
+        updatedAt = datetime('now')
+      WHERE id = ? AND user_id = ?
+    `).run(profile.firstName, profile.lastName, profile.company, profile.title, leadId, userId);
+
+    const updated = db.prepare('SELECT * FROM leads WHERE id = ?').get(leadId);
+    updated.tags = JSON.parse(updated.tags || '[]');
+    res.json({ success: true, lead: updated, enrichedProfile: profile });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 module.exports = router;
 

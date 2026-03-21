@@ -168,22 +168,36 @@ router.post('/disconnect', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/integrations/sync-inbox - Trigger server-side inbox sync
+// POST /api/integrations/sync-inbox - Trigger server-side inbox sync via Unipile
 router.post('/sync-inbox', authenticate, async (req, res) => {
   try {
     console.log(`[Integrations] Starting inbox sync for user ${req.user.id}...`);
-    const result = await linkedinApi.syncInbox(req.user.id);
+    const unipile = require('../services/unipileApi');
+    const result = await unipile.syncInbox();
     logAction(req, 'integration.inbox_synced', 'integration', '', '', { messages: result.messages, conversations: result.conversations });
     res.json({
       success: true,
-      message: `Synced ${result.messages} messages across ${result.conversations} new conversations.`,
+      message: `Synced ${result.messages} messages across ${result.conversations} conversations.`,
       ...result
     });
   } catch (err) {
     console.error('[Integrations] Sync error:', err.message);
-    // Use 502 (not 401!) for LinkedIn session issues — 401 triggers frontend logout
-    const status = err.message.includes('expired') || err.message.includes('reconnect') ? 502 : 500;
-    res.status(status).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/integrations/enrich-profile - Get full profile info from LinkedIn URL
+router.post('/enrich-profile', authenticate, async (req, res) => {
+  try {
+    const { linkedinUrl } = req.body;
+    if (!linkedinUrl) return res.status(400).json({ error: 'LinkedIn URL required' });
+    
+    const unipile = require('../services/unipileApi');
+    const profile = await unipile.getUserFullProfile(linkedinUrl);
+    res.json({ success: true, profile });
+  } catch (err) {
+    console.error('[Integrations] Enrich error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

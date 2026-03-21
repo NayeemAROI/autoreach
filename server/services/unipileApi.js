@@ -361,7 +361,7 @@ function setAccountId(accountId) {
  * Delete/disconnect a LinkedIn account from Unipile
  */
 async function deleteAccount(accountId) {
-  if (!accountId) accountId = getAccountId();
+  if (!accountId) accountId = await getAccountIdDynamic();
   if (!accountId) throw new Error('No account ID to disconnect');
 
   const apiKey = getApiKey();
@@ -392,6 +392,59 @@ async function deleteAccount(accountId) {
   return { success: true };
 }
 
+/**
+ * Sync inbox — fetch recent messages via Unipile
+ */
+async function syncInbox() {
+  const accountId = await getAccountIdDynamic();
+  if (!accountId) throw new Error('No LinkedIn account connected');
+
+  logger.info(`[Unipile] Starting inbox sync...`);
+  const data = await unipileFetch(`/chats?account_id=${accountId}&limit=50`);
+  const chats = data.items || [];
+  logger.info(`[Unipile] Fetched ${chats.length} conversations`);
+
+  let messageCount = 0;
+  for (const chat of chats.slice(0, 20)) {
+    try {
+      const msgs = await unipileFetch(`/chats/${chat.id}/messages?limit=10`);
+      messageCount += (msgs.items || []).length;
+    } catch {}
+  }
+
+  logger.info(`[Unipile] ✅ Synced ${messageCount} messages from ${chats.length} chats`);
+  return { success: true, conversations: chats.length, messages: messageCount };
+}
+
+/**
+ * Get full LinkedIn profile from URL or username via Unipile
+ */
+async function getUserFullProfile(profileUrl) {
+  const accountId = await getAccountIdDynamic();
+  if (!accountId) throw new Error('No LinkedIn account connected');
+
+  // Extract username from URL
+  let identifier = profileUrl;
+  const match = profileUrl.match(/linkedin\.com\/in\/([^\/\?]+)/i);
+  if (match) identifier = match[1];
+
+  logger.info(`[Unipile] Fetching full profile for: ${identifier}`);
+  const data = await unipileFetch(`/users/${encodeURIComponent(identifier)}?account_id=${accountId}`);
+  
+  logger.info(`[Unipile] ✅ Got full profile: ${data.first_name} ${data.last_name}`);
+  return {
+    firstName: data.first_name || '',
+    lastName: data.last_name || '',
+    company: data.company || data.company_name || '',
+    title: data.headline || data.occupation || '',
+    location: data.location || '',
+    about: data.summary || data.about || '',
+    profilePicture: data.profile_picture || data.avatar || '',
+    connections: data.connections_count || 0,
+    industry: data.industry || '',
+  };
+}
+
 module.exports = {
   getUserProfile,
   sendInvite,
@@ -407,4 +460,6 @@ module.exports = {
   solveCheckpoint,
   setAccountId,
   deleteAccount,
+  syncInbox,
+  getUserFullProfile,
 };
