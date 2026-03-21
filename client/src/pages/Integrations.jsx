@@ -126,7 +126,7 @@ export default function Integrations() {
             </div>
             <div>
               <h2 className="text-lg font-bold text-text-primary">LinkedIn Account</h2>
-              <p className="text-xs text-text-muted">Server-side connection via cookie injection</p>
+              <p className="text-xs text-text-muted">{status?.method === 'unipile' ? 'Connected via Unipile API' : 'Server-side connection'}</p>
             </div>
           </div>
           <div className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
@@ -148,7 +148,8 @@ export default function Integrations() {
                 <div>
                   <div className="text-sm font-semibold text-text-primary">{status.profileName}</div>
                   <div className="text-xs text-success flex items-center gap-1">
-                    <div className="w-1.5 h-1.5 rounded-full bg-success"></div> Active Session
+                    <div className="w-1.5 h-1.5 rounded-full bg-success"></div>
+                    {status.method === 'unipile' ? 'Unipile API' : 'Active Session'}
                   </div>
                 </div>
               </div>
