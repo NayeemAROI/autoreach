@@ -115,7 +115,20 @@ jobQueue.register('linkedin_action', async (payload) => {
       return;
     }
 
-    // Log success
+    // Log success to campaign_logs
+    db.prepare(`INSERT INTO campaign_logs (id, campaign_id, lead_id, action_type, result, user_id)
+      VALUES (?, ?, ?, ?, 'success', ?)`)
+      .run(uuidv4(), campaignId, leadId, actionType, userId);
+
+    // Update campaign stats
+    try {
+      const campaign = db.prepare('SELECT stats FROM campaigns WHERE id = ?').get(campaignId);
+      const stats = JSON.parse(campaign?.stats || '{}');
+      stats.sent = (stats.sent || 0) + 1;
+      db.prepare('UPDATE campaigns SET stats = ? WHERE id = ?').run(JSON.stringify(stats), campaignId);
+    } catch {}
+
+    // Log to activities
     db.prepare('INSERT INTO activities (id, user_id, leadId, campaignId, type, detail) VALUES (?, ?, ?, ?, ?, ?)')
       .run(uuidv4(), userId, leadId, campaignId, `${actionType}_completed`, `Unipile ${actionType} success`);
 
@@ -124,6 +137,13 @@ jobQueue.register('linkedin_action', async (payload) => {
   } catch (err) {
     logger.error(`❌ Unipile action failed: ${actionType}`, { leadId, campaignId, error: err.message });
     
+    // Log failure to campaign_logs
+    try {
+      db.prepare(`INSERT INTO campaign_logs (id, campaign_id, lead_id, action_type, result, error_message, user_id)
+        VALUES (?, ?, ?, ?, 'failed', ?, ?)`)
+        .run(uuidv4(), campaignId, leadId, actionType, err.message, userId);
+    } catch {}
+
     if (err.message.includes('rate limit') || err.message.includes('429') || err.message.includes('422') || err.message.includes('cannot_resend')) {
       throw err; // Let job queue retry later
     } else {

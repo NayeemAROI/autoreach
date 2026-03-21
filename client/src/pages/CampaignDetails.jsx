@@ -195,6 +195,16 @@ export default function CampaignDetails() {
     finally { setSaving(false) }
   }
 
+  const retryFailed = async () => {
+    try {
+      const res = await apiFetch(`/api/campaigns/${id}/retry-failed`, { method: 'POST' })
+      const data = await res.json()
+      showToast(data.message || 'Failed leads retried')
+      if (activeTab === 'overview') loadAnalytics()
+      if (activeTab === 'logs') loadLogs()
+    } catch { showToast('Failed to retry', 'error') }
+  }
+
   // ─── Derived data ────────────────────────────────────────────
   const filteredLeads = useMemo(() => {
     let result = leads
@@ -288,6 +298,9 @@ export default function CampaignDetails() {
             )}
             <button onClick={() => navigate(`/campaigns/${id}/builder`)} className="btn btn-sm btn-secondary">
               <Workflow className="w-3.5 h-3.5" /> Edit Sequence
+            </button>
+            <button onClick={retryFailed} className="btn btn-sm bg-primary/10 text-primary border-primary/20 hover:bg-primary/20">
+              <RefreshCw className="w-3.5 h-3.5" /> Retry Failed
             </button>
             <button onClick={duplicateCampaign} className="btn btn-sm btn-secondary">
               <Copy className="w-3.5 h-3.5" /> Duplicate

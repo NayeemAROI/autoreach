@@ -520,6 +520,23 @@ router.patch('/:id', (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// POST retry failed leads
+router.post('/:id/retry-failed', (req, res) => {
+  const userId = req.user.id;
+  try {
+    const campaign = db.prepare('SELECT id FROM campaigns WHERE id = ? AND user_id = ?').get(req.params.id, userId);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    const result = db.prepare(`
+      UPDATE campaign_leads SET status = 'active', error_message = '', next_execution_at = datetime('now')
+      WHERE campaign_id = ? AND user_id = ? AND status = 'error'
+    `).run(req.params.id, userId);
+
+    res.json({ success: true, retried: result.changes, message: `${result.changes} failed lead(s) queued for retry.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 module.exports = router;
 
