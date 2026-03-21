@@ -170,9 +170,18 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/integrations/disconnect - Remove stored cookie
-router.post('/disconnect', authenticate, (req, res) => {
+// POST /api/integrations/disconnect - Remove stored cookie AND Unipile account
+router.post('/disconnect', authenticate, async (req, res) => {
   try {
+    // Disconnect from Unipile
+    try {
+      const unipile = require('../services/unipileApi');
+      await unipile.deleteAccount();
+    } catch (err) {
+      console.warn('[Integrations] Unipile disconnect warning:', err.message);
+    }
+
+    // Also clear local cookie
     linkedinApi.disconnectCookie(req.user.id);
     logAction(req, 'integration.linkedin_disconnected', 'integration');
     res.json({ success: true, message: 'LinkedIn disconnected.' });

@@ -299,6 +299,41 @@ function setAccountId(accountId) {
   }
 }
 
+/**
+ * Delete/disconnect a LinkedIn account from Unipile
+ */
+async function deleteAccount(accountId) {
+  if (!accountId) accountId = getAccountId();
+  if (!accountId) throw new Error('No account ID to disconnect');
+
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('Unipile API key not configured');
+
+  const url = `${UNIPILE_BASE}/accounts/${encodeURIComponent(accountId)}`;
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      'X-API-KEY': apiKey,
+      'accept': 'application/json',
+    },
+  });
+
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text();
+    logger.error(`[Unipile] Delete account failed: ${res.status} - ${text.substring(0, 200)}`);
+    throw new Error(`Failed to disconnect from Unipile (${res.status})`);
+  }
+
+  // Clear stored account ID
+  try {
+    db.prepare(`DELETE FROM settings WHERE key = 'unipile_account_id'`).run();
+    delete process.env.UNIPILE_ACCOUNT_ID;
+  } catch {}
+
+  logger.info(`[Unipile] ✅ Account ${accountId} disconnected`);
+  return { success: true };
+}
+
 module.exports = {
   getUserProfile,
   sendInvite,
@@ -312,4 +347,5 @@ module.exports = {
   connectLinkedIn,
   solveCheckpoint,
   setAccountId,
+  deleteAccount,
 };
