@@ -250,7 +250,7 @@ async function solveCheckpoint(accountId, code) {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('Unipile API key not configured');
 
-  const url = `${UNIPILE_BASE}/accounts/${encodeURIComponent(accountId)}/checkpoint`;
+  const url = `${UNIPILE_BASE}/accounts/checkpoint`;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -258,7 +258,7 @@ async function solveCheckpoint(accountId, code) {
       'accept': 'application/json',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ account_id: accountId, code, provider: 'LINKEDIN' }),
   });
 
   const data = await res.json();
