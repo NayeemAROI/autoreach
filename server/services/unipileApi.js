@@ -27,16 +27,37 @@ function getApiKey() {
 }
 
 function getAccountId() {
-  // Try env first, then database
+  // Check database first (has latest from login)
+  try {
+    const setting = db.prepare("SELECT value FROM settings WHERE key = 'unipile_account_id'").get();
+    if (setting?.value) return setting.value;
+  } catch {}
+  
+  // Fall back to env var
   const envId = process.env.UNIPILE_ACCOUNT_ID || '';
   if (envId) return envId;
   
+  return '';
+}
+
+/**
+ * Get account ID with dynamic fallback — fetches from Unipile if not stored
+ */
+async function getAccountIdDynamic() {
+  const stored = getAccountId();
+  if (stored) return stored;
+  
+  // Try to get from Unipile accounts list
   try {
-    const setting = db.prepare("SELECT value FROM settings WHERE key = 'unipile_account_id'").get();
-    return setting?.value || '';
-  } catch {
-    return '';
-  }
+    const accounts = await unipileFetch('/accounts');
+    const linkedin = (accounts.items || []).find(a => a.type === 'LINKEDIN');
+    if (linkedin?.id) {
+      setAccountId(linkedin.id);
+      return linkedin.id;
+    }
+  } catch {}
+  
+  return '';
 }
 
 /**
@@ -79,7 +100,7 @@ async function unipileFetch(endpoint, options = {}) {
  * Get user profile by LinkedIn public identifier (e.g., "john-doe")
  */
 async function getUserProfile(publicIdentifier) {
-  const accountId = getAccountId();
+  const accountId = await getAccountIdDynamic();
   if (!accountId) throw new Error('Unipile account ID not configured');
 
   const profile = await unipileFetch(`/users/${encodeURIComponent(publicIdentifier)}?account_id=${accountId}`);
@@ -91,7 +112,7 @@ async function getUserProfile(publicIdentifier) {
  * Send a connection request (invite) to a LinkedIn user
  */
 async function sendInvite(publicIdentifier, message = '') {
-  const accountId = getAccountId();
+  const accountId = await getAccountIdDynamic();
   if (!accountId) throw new Error('Unipile account ID not configured');
 
   // First get the provider_id from the public identifier
@@ -122,7 +143,7 @@ async function sendInvite(publicIdentifier, message = '') {
  * Send a message to a LinkedIn user (must be connected)
  */
 async function sendMessage(publicIdentifier, messageText) {
-  const accountId = getAccountId();
+  const accountId = await getAccountIdDynamic();
   if (!accountId) throw new Error('Unipile account ID not configured');
 
   // Start a new chat or send to existing
