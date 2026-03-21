@@ -264,6 +264,44 @@ async function connectLinkedIn(username, password) {
 }
 
 /**
+ * Connect LinkedIn account using a li_at cookie via Unipile
+ */
+async function connectWithCookie(liAtCookie) {
+  const apiKey = getApiKey();
+  if (!apiKey) throw new Error('Unipile API key not configured');
+
+  const url = `${UNIPILE_BASE}/accounts`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'X-API-KEY': apiKey,
+      'accept': 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      provider: 'LINKEDIN',
+      access_token: liAtCookie,
+    }),
+  });
+
+  const data = await res.json();
+
+  if (!res.ok) {
+    throw new Error(data.error || data.message || data.detail || `Cookie connect failed (${res.status})`);
+  }
+
+  const accountId = data.id || data.account_id || '';
+  if (accountId) setAccountId(accountId);
+
+  logger.info(`[Unipile] ✅ LinkedIn connected via cookie: ${data.name || ''} (${accountId})`);
+  return {
+    success: true,
+    accountId,
+    name: data.name || 'LinkedIn Profile',
+  };
+}
+
+/**
  * Solve a LinkedIn checkpoint (2FA code, OTP, CAPTCHA)
  */
 async function solveCheckpoint(accountId, code) {
@@ -365,6 +403,7 @@ module.exports = {
   getApiKey,
   getAccountId,
   connectLinkedIn,
+  connectWithCookie,
   solveCheckpoint,
   setAccountId,
   deleteAccount,

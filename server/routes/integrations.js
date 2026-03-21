@@ -129,44 +129,22 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
     }
 
     const trimmed = li_at.trim();
-    console.log(`[Integrations] Validating LinkedIn cookie for user ${req.user.id}...`);
+    console.log(`[Integrations] Connecting via cookie for user ${req.user.id}...`);
     
-    const result = await linkedinApi.validateCookie(trimmed);
-    
-    if (!result.valid) {
-      return res.status(400).json({ error: result.error || 'Cookie validation failed.' });
-    }
+    // Use Unipile to connect with cookie
+    const unipile = require('../services/unipileApi');
+    const result = await unipile.connectWithCookie(trimmed);
 
-    // Prevent same LinkedIn profile from being connected to multiple workspaces
-    if (result.memberId) {
-      const db = require('../db/database');
-      const wsId = db.prepare('SELECT activeWorkspaceId FROM users WHERE id = ?').get(req.user.id)?.activeWorkspaceId || '';
-      const existing = db.prepare(`
-        SELECT w.id, w.name FROM workspaces w
-        WHERE w.linkedin_member_id = ? AND w.id != ? AND w.linkedin_cookie_valid = 1
-      `).get(result.memberId, wsId);
-      
-      if (existing) {
-        return res.status(409).json({ 
-          error: `This LinkedIn profile (${result.profileName}) is already connected to workspace "${existing.name}". Disconnect it there first.` 
-        });
-      }
-    }
-
-    // Save to DB (including memberId needed for messaging API)
-    linkedinApi.saveCookie(req.user.id, trimmed, result.csrf, result.profileName, result.profileUrl, result.memberId);
-    console.log(`[Integrations] LinkedIn connected for ${result.profileName}`);
-    
-    logAction(req, 'integration.linkedin_connected', 'integration', '', result.profileName, { profileUrl: result.profileUrl });
+    logAction(req, 'integration.linkedin_connected', 'integration', '', result.name);
     res.json({
       success: true,
-      profileName: result.profileName,
-      profileUrl: result.profileUrl,
-      message: `Connected as ${result.profileName}!`
+      profileName: result.name,
+      accountId: result.accountId,
+      message: `Connected as ${result.name}!`
     });
   } catch (err) {
-    console.error('[Integrations] Cookie connect error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('[Integrations] Cookie connect error:', err.message);
+    res.status(400).json({ error: err.message });
   }
 });
 
