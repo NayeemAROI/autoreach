@@ -614,6 +614,68 @@ async function getUserFullProfile(profileUrl, wsId) {
   };
 }
 
+/**
+ * Register a webhook with Unipile for account status updates
+ */
+async function registerWebhook(requestUrl) {
+  logger.info(`[Unipile] Registering webhook: ${requestUrl}`);
+  const data = await unipileFetch('/webhooks', {
+    method: 'POST',
+    body: JSON.stringify({
+      request_url: requestUrl,
+      source: 'account_status',
+      name: 'Autoreach Account Status',
+      headers: { 'Content-Type': 'application/json' }
+    })
+  });
+  logger.info(`[Unipile] ✅ Webhook registered: ${JSON.stringify(data)}`);
+  return data;
+}
+
+/**
+ * List all registered webhooks
+ */
+async function listWebhooks() {
+  const data = await unipileFetch('/webhooks');
+  return data.items || data || [];
+}
+
+/**
+ * Delete a webhook
+ */
+async function deleteWebhook(webhookId) {
+  await unipileFetch(`/webhooks/${webhookId}`, { method: 'DELETE' });
+  logger.info(`[Unipile] Deleted webhook ${webhookId}`);
+}
+
+/**
+ * Ensure webhook is registered — called on server startup
+ */
+async function ensureWebhookRegistered(appBaseUrl) {
+  if (!appBaseUrl) {
+    logger.warn('[Unipile] No APP_BASE_URL set — skipping webhook registration');
+    return;
+  }
+  
+  const webhookUrl = `${appBaseUrl}/api/webhooks/unipile`;
+  
+  try {
+    const webhooks = await listWebhooks();
+    const existing = webhooks.find(w => w.request_url === webhookUrl);
+    
+    if (existing) {
+      logger.info(`[Unipile] Webhook already registered: ${webhookUrl}`);
+      return existing;
+    }
+    
+    const result = await registerWebhook(webhookUrl);
+    logger.info(`[Unipile] Webhook auto-registered: ${webhookUrl}`);
+    return result;
+  } catch (err) {
+    logger.warn(`[Unipile] Failed to register webhook: ${err.message}`);
+  }
+}
+
 module.exports = {
   getUserProfile,
   sendInvite,
@@ -631,4 +693,8 @@ module.exports = {
   deleteAccount,
   syncInbox,
   getUserFullProfile,
+  registerWebhook,
+  listWebhooks,
+  deleteWebhook,
+  ensureWebhookRegistered,
 };

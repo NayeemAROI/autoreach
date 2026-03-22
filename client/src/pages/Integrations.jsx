@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { ShieldCheck, ShieldAlert, Key, RefreshCw, Unplug, CheckCircle2, AlertCircle, Loader2, MessageSquare, HelpCircle, Mail, Lock, Shield } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { ShieldCheck, ShieldAlert, Key, RefreshCw, Unplug, CheckCircle2, AlertCircle, Loader2, MessageSquare, HelpCircle, Mail, Lock, Shield, Clock } from 'lucide-react'
 import { apiFetch } from '../utils/api'
 
 export default function Integrations() {
@@ -22,12 +22,23 @@ export default function Integrations() {
   const [showCookieInput, setShowCookieInput] = useState(false)
   const [cookieInput, setCookieInput] = useState('')
 
+  // Connection phase: 'idle' | 'connecting' | 'connected'
+  const [connectionPhase, setConnectionPhase] = useState('idle')
+  
+  // Countdown timer for verification (5 min timeout)
+  const [countdown, setCountdown] = useState(0)
+  const countdownRef = useRef(null)
+
   const fetchStatus = async () => {
     try {
       const res = await apiFetch('/api/integrations/status')
       if (res.ok) {
         const data = await res.json()
         setStatus(data)
+        if (data.connected) {
+          setConnectionPhase('connected')
+          setCheckpoint(null)
+        }
       }
     } catch (err) {
       console.error('Failed to fetch integration status:', err)
@@ -38,8 +49,80 @@ export default function Integrations() {
 
   useEffect(() => {
     fetchStatus()
-    const interval = setInterval(fetchStatus, 5000)
+    const interval = setInterval(fetchStatus, 10000) // Reduced to 10s, SSE handles real-time
     return () => clearInterval(interval)
+  }, [])
+
+  // SSE connection for real-time webhook updates
+  useEffect(() => {
+    let eventSource = null
+    try {
+      const token = localStorage.getItem('token')
+      if (!token) return
+      
+      const baseUrl = import.meta.env.VITE_API_URL || ''
+      eventSource = new EventSource(`${baseUrl}/api/integrations/status-stream?token=${token}`)
+      
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'ping') return
+          
+          console.log('[SSE] Webhook event:', data)
+          
+          if (data.type === 'connected') {
+            setConnectionPhase('connected')
+            setCheckpoint(null)
+            setConnecting(false)
+            setMessage({ type: 'success', text: data.message || 'LinkedIn connected!' })
+            fetchStatus()
+            // Clear countdown
+            if (countdownRef.current) clearInterval(countdownRef.current)
+          } else if (data.type === 'connecting') {
+            setConnectionPhase('connecting')
+          } else if (data.type === 'checkpoint') {
+            setConnectionPhase('idle')
+            setConnecting(false)
+            setCheckpoint({ 
+              accountId: data.accountId, 
+              type: data.checkpointType || '2FA', 
+              message: data.message 
+            })
+            setMessage({ type: 'info', text: data.message })
+            // Start 5-minute countdown
+            setCountdown(300)
+            if (countdownRef.current) clearInterval(countdownRef.current)
+            countdownRef.current = setInterval(() => {
+              setCountdown(prev => {
+                if (prev <= 1) {
+                  clearInterval(countdownRef.current)
+                  return 0
+                }
+                return prev - 1
+              })
+            }, 1000)
+          } else if (data.type === 'error') {
+            setConnectionPhase('idle')
+            setConnecting(false)
+            setMessage({ type: 'error', text: data.message })
+          } else if (data.type === 'disconnected') {
+            setConnectionPhase('idle')
+            setStatus(null)
+            setMessage({ type: 'info', text: data.message })
+            fetchStatus()
+          }
+        } catch {}
+      }
+      
+      eventSource.onerror = () => {
+        // SSE will auto-reconnect
+      }
+    } catch {}
+    
+    return () => {
+      if (eventSource) eventSource.close()
+      if (countdownRef.current) clearInterval(countdownRef.current)
+    }
   }, [])
 
   const handleLinkedInLogin = async () => {
@@ -48,6 +131,7 @@ export default function Integrations() {
       return
     }
     setConnecting(true)
+    setConnectionPhase('connecting')
     setMessage(null)
     setCheckpoint(null)
     try {
@@ -60,15 +144,27 @@ export default function Integrations() {
       
       if (data.checkpoint) {
         // 2FA required
+        setConnectionPhase('idle')
         setCheckpoint({ accountId: data.accountId, type: data.type, message: data.message })
         setMessage({ type: 'info', text: data.message || 'LinkedIn requires verification. Please enter the code.' })
+        // Start 5-minute countdown
+        setCountdown(300)
+        if (countdownRef.current) clearInterval(countdownRef.current)
+        countdownRef.current = setInterval(() => {
+          setCountdown(prev => {
+            if (prev <= 1) { clearInterval(countdownRef.current); return 0 }
+            return prev - 1
+          })
+        }, 1000)
       } else if (res.ok && data.success) {
+        setConnectionPhase('connected')
         setMessage({ type: 'success', text: data.message })
         setEmail('')
         setPassword('')
         fetchStatus()
       } else {
         // Login failed — auto-show cookie input as fallback
+        setConnectionPhase('idle')
         setShowCookieInput(true)
         setMessage({ type: 'error', text: (data.error || 'Login failed.') + ' Use the li_at cookie method below instead — it\'s more reliable.' })
       }
@@ -226,15 +322,40 @@ export default function Integrations() {
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
             <div className={`px-2.5 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
-              isConnected ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning'
+              isConnected ? 'bg-success/10 text-success' 
+              : connectionPhase === 'connecting' ? 'bg-primary/10 text-primary'
+              : 'bg-warning/10 text-warning'
             }`}>
-              {isConnected ? <ShieldCheck className="w-3.5 h-3.5" /> : <ShieldAlert className="w-3.5 h-3.5" />}
-              {isConnected ? 'Connected' : 'Not Connected'}
+              {isConnected ? <ShieldCheck className="w-3.5 h-3.5" /> 
+               : connectionPhase === 'connecting' ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+               : <ShieldAlert className="w-3.5 h-3.5" />}
+              {isConnected ? 'Connected' : connectionPhase === 'connecting' ? 'Connecting...' : 'Not Connected'}
             </div>
           </div>
         </div>
 
-        {isConnected ? (
+        {connectionPhase === 'connecting' && !isConnected && !checkpoint ? (
+          /* Connecting State */
+          <div className="space-y-4">
+            <div className="p-6 bg-bg-secondary rounded-lg border border-primary/20 text-center">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-primary/10 flex items-center justify-center">
+                <Loader2 className="w-8 h-8 text-primary animate-spin" />
+              </div>
+              <h3 className="text-lg font-semibold text-text-primary mb-2">Connecting to LinkedIn...</h3>
+              <p className="text-sm text-text-muted mb-4">We're setting up your connection. This may take a moment.</p>
+              <div className="flex items-center justify-center gap-6 text-xs text-text-muted">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-success" />
+                  <span>Credentials sent</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                  <span>Verifying with LinkedIn</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : isConnected ? (
           /* Connected State */
           <div className="space-y-4">
             <div className="p-4 bg-bg-secondary rounded-lg border border-border flex items-center justify-between">
@@ -280,7 +401,19 @@ export default function Integrations() {
                 <Shield className="w-5 h-5 text-primary" />
                 <span className="text-sm font-semibold text-text-primary">Verification Required</span>
               </div>
-              <p className="text-sm text-text-secondary mb-4">{checkpoint.message || 'LinkedIn sent a verification code. Please enter it below.'}</p>
+              <p className="text-sm text-text-secondary mb-3">{checkpoint.message || 'LinkedIn sent a verification code. Please enter it below.'}</p>
+              {countdown > 0 && (
+                <div className="flex items-center gap-2 mb-3 text-xs text-warning">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Code expires in {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}</span>
+                </div>
+              )}
+              {countdown === 0 && countdown !== null && (
+                <div className="flex items-center gap-2 mb-3 text-xs text-error">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                  <span>Verification timed out. Please try again.</span>
+                </div>
+              )}
               
               <div className="flex gap-2">
                 <input

@@ -262,4 +262,75 @@ router.post('/enrich-profile', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/integrations/status-stream - SSE endpoint for real-time status updates
+// Note: EventSource can't send headers, so we accept token from query param
+router.get('/status-stream', (req, res) => {
+  const token = req.query.token || req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'Token required' });
+  
+  try {
+    const jwt = require('jsonwebtoken');
+    jwt.verify(token, process.env.JWT_SECRET || 'autoreach-secret-key-change-in-production');
+  } catch {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+
+  // Send initial keepalive
+  res.write('data: {"type":"ping"}\n\n');
+
+  // Listen for webhook events
+  const { webhookEvents } = require('./webhookHandler');
+  const onStatus = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  webhookEvents.on('status', onStatus);
+
+  // Keepalive every 30s
+  const keepalive = setInterval(() => {
+    res.write('data: {"type":"ping"}\n\n');
+  }, 30000);
+
+  // Cleanup on disconnect
+  req.on('close', () => {
+    webhookEvents.off('status', onStatus);
+    clearInterval(keepalive);
+  });
+});
+
+// POST /api/integrations/setup-webhook - Register webhook with Unipile
+router.post('/setup-webhook', authenticate, async (req, res) => {
+  try {
+    const unipile = require('../services/unipileApi');
+    const appUrl = process.env.APP_BASE_URL || req.body.appUrl;
+    if (!appUrl) {
+      return res.status(400).json({ error: 'APP_BASE_URL not configured. Set it in environment variables or pass appUrl in request body.' });
+    }
+    
+    const result = await unipile.ensureWebhookRegistered(appUrl);
+    res.json({ success: true, message: 'Webhook registered with Unipile.', webhook: result });
+  } catch (err) {
+    console.error('[Integrations] Webhook setup error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/integrations/webhooks - List registered webhooks
+router.get('/webhooks', authenticate, async (req, res) => {
+  try {
+    const unipile = require('../services/unipileApi');
+    const webhooks = await unipile.listWebhooks();
+    res.json({ webhooks });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

@@ -97,6 +97,7 @@ app.use('/api/integrations', require('./routes/integrations'));
 app.use('/api/audit-log', require('./routes/auditLog'));
 app.use('/api/profile', require('./routes/profile'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/webhooks', require('./routes/webhookHandler').router);
 
 // Initialize Lead Verifier
 const verifier = require('./services/leadVerifier');
@@ -139,4 +140,15 @@ server.listen(PORT, () => {
   // Start the campaign engine (job queue + scanner)
   const campaignEngine = require('./services/engine');
   campaignEngine.start();
+
+  // Auto-register Unipile webhook (non-blocking)
+  const appBaseUrl = process.env.APP_BASE_URL;
+  if (appBaseUrl) {
+    const unipile = require('./services/unipileApi');
+    unipile.ensureWebhookRegistered(appBaseUrl).catch(err => {
+      logger.warn(`[Startup] Webhook registration skipped: ${err.message}`);
+    });
+  } else {
+    logger.info('[Startup] Set APP_BASE_URL env var to enable Unipile webhook auto-registration');
+  }
 });
