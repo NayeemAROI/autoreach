@@ -385,8 +385,8 @@ function setAccountId(accountId, wsId) {
 /**
  * Delete/disconnect a LinkedIn account from Unipile
  */
-async function deleteAccount(accountId) {
-  if (!accountId) accountId = await getAccountIdDynamic();
+async function deleteAccount(accountId, wsId) {
+  if (!accountId) accountId = await getAccountIdDynamic(wsId);
   if (!accountId) throw new Error('No account ID to disconnect');
 
   const apiKey = getApiKey();
@@ -409,8 +409,9 @@ async function deleteAccount(accountId) {
 
   // Clear stored account ID
   try {
-    db.prepare(`DELETE FROM settings WHERE key = 'unipile_account_id'`).run();
-    delete process.env.UNIPILE_ACCOUNT_ID;
+    const key = wsId ? `unipile_account_id:${wsId}` : 'unipile_account_id';
+    db.prepare(`DELETE FROM settings WHERE key = ?`).run(key);
+    if (!wsId) delete process.env.UNIPILE_ACCOUNT_ID;
   } catch {}
 
   logger.info(`[Unipile] ✅ Account ${accountId} disconnected`);
@@ -420,8 +421,8 @@ async function deleteAccount(accountId) {
 /**
  * Sync inbox — fetch recent messages via Unipile
  */
-async function syncInbox() {
-  const accountId = await getAccountIdDynamic();
+async function syncInbox(wsId) {
+  const accountId = await getAccountIdDynamic(wsId);
   if (!accountId) throw new Error('No LinkedIn account connected');
 
   logger.info(`[Unipile] Starting inbox sync...`);
@@ -444,8 +445,8 @@ async function syncInbox() {
 /**
  * Get full LinkedIn profile from URL or username via Unipile
  */
-async function getUserFullProfile(profileUrl) {
-  const accountId = await getAccountIdDynamic();
+async function getUserFullProfile(profileUrl, wsId) {
+  const accountId = await getAccountIdDynamic(wsId);
   if (!accountId) throw new Error('No LinkedIn account connected');
 
   // Extract username from URL

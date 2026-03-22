@@ -21,7 +21,8 @@ import {
   Activity,
   UserCircle,
   Building2,
-  UsersRound
+  UsersRound,
+  Shield
 } from 'lucide-react'
 
 const navItems = [
@@ -38,6 +39,8 @@ const navItems = [
   { path: '/profile', icon: UserCircle, label: 'Profile' },
   { path: '/workspace/members', icon: UsersRound, label: 'Team Members', adminOnly: true },
   { path: '/workspace/settings', icon: Building2, label: 'Workspace', adminOnly: true },
+  { type: 'divider' },
+  { path: '/admin', icon: Shield, label: 'Super Admin', superAdminOnly: true },
 ]
 
 export default function Sidebar() {
@@ -66,7 +69,8 @@ export default function Sidebar() {
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         {navItems.filter(item => {
           if (item.ownerOnly && !isOwner) return false;
-          if (item.adminOnly && !isOwner) return false; // TODO: add admin check
+          if (item.adminOnly && !isOwner) return false; 
+          if (item.superAdminOnly && user?.email !== 'admin@autoreach.io') return false;
           return true;
         }).map((item, i) => {
           if (item.type === 'divider') return <div key={`div-${i}`} className="border-t border-border/50 my-2 mx-2"></div>;
