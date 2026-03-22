@@ -263,8 +263,8 @@ function getProxyConfig(countryCode = 'bd') {
   const pass = `${basePass}_country-${countryCode.toLowerCase()}`;
   
   return {
-    protocol: 'HTTP',
-    domain: host,
+    protocol: 'http',
+    host: host,
     port: port,
     username: user,
     password: pass
