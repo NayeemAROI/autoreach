@@ -12,7 +12,7 @@ export default function Integrations() {
   // LinkedIn login form
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [proxyCountry, setProxyCountry] = useState('bd')
+  const [proxyCountry, setProxyCountry] = useState('none')
 
   // 2FA / Checkpoint
   const [checkpoint, setCheckpoint] = useState(null) // { accountId, type, message }
@@ -544,6 +544,7 @@ export default function Integrations() {
                   onChange={(e) => setProxyCountry(e.target.value)}
                   className="w-full pl-10 pr-10 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary focus:outline-none focus:border-primary transition-colors appearance-none cursor-pointer"
                 >
+                  <option value="none">No Proxy (Direct)</option>
                   <option value="bd">Bangladesh (BD)</option>
                   <option value="us">United States (US)</option>
                   <option value="gb">United Kingdom (GB)</option>
@@ -603,6 +604,7 @@ export default function Integrations() {
                       onChange={(e) => setProxyCountry(e.target.value)}
                       className="w-full h-full pl-8 pr-7 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary focus:outline-none focus:border-primary transition-colors appearance-none cursor-pointer"
                     >
+                      <option value="none">No Proxy</option>
                       <option value="bd">BD Proxy</option>
                       <option value="us">US Proxy</option>
                       <option value="gb">UK Proxy</option>

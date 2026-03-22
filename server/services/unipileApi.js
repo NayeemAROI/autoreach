@@ -252,6 +252,9 @@ async function healthCheck(wsId) {
  * Get proxy config for Unipile account creation (residential IP)
  */
 function getProxyConfig(countryCode = 'bd') {
+  // 'none' means no proxy
+  if (!countryCode || countryCode === 'none') return null;
+
   const host = process.env.PROXY_HOST || 'geo.iproyal.com';
   const port = parseInt(process.env.PROXY_PORT || '12321');
   const user = process.env.PROXY_USER || '6irlNOIFopruAF3N';
@@ -282,7 +285,9 @@ async function connectLinkedIn(username, password, proxyCountry = 'bd') {
     password: password,
   };
   if (proxy) bodyObj.proxy = proxy;
-  logger.info(`[Unipile] Connecting LinkedIn with proxy: ${proxy ? proxy.domain + ':' + proxy.port : 'none'}`);
+  // Also set top-level country for Unipile's built-in geo support
+  if (proxyCountry && proxyCountry !== 'none') bodyObj.country = proxyCountry.toUpperCase();
+  logger.info(`[Unipile] Connecting LinkedIn with proxy: ${proxy ? proxy.host + ':' + proxy.port : 'none'}, country: ${proxyCountry}`);
 
   const url = `${UNIPILE_BASE}/accounts`;
   const res = await fetch(url, {
@@ -363,6 +368,16 @@ async function connectWithCookie(liAtCookie, proxyCountry = 'bd') {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('Unipile API key not configured');
 
+  const proxy = getProxyConfig(proxyCountry);
+  const bodyObj = {
+    provider: 'LINKEDIN',
+    access_token: liAtCookie,
+  };
+  if (proxy) bodyObj.proxy = proxy;
+  // Also set top-level country for Unipile's built-in geo support
+  if (proxyCountry && proxyCountry !== 'none') bodyObj.country = proxyCountry.toUpperCase();
+  logger.info(`[Unipile] Connecting LinkedIn via cookie with proxy: ${proxy ? proxy.host + ':' + proxy.port : 'none'}, country: ${proxyCountry}`);
+
   const url = `${UNIPILE_BASE}/accounts`;
   const res = await fetch(url, {
     method: 'POST',
@@ -371,17 +386,22 @@ async function connectWithCookie(liAtCookie, proxyCountry = 'bd') {
       'accept': 'application/json',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      provider: 'LINKEDIN',
-      access_token: liAtCookie,
-      ...(getProxyConfig(proxyCountry) ? { proxy: getProxyConfig(proxyCountry) } : {}),
-    }),
+    body: JSON.stringify(bodyObj),
   });
 
-  const data = await res.json();
+  let data;
+  const rawText = await res.text();
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    logger.error(`[Unipile] Cookie connect non-JSON response: ${rawText.substring(0, 500)}`);
+    throw new Error(`Unexpected response from Unipile (${res.status})`);
+  }
 
   if (!res.ok) {
-    throw new Error(data.error || data.message || data.detail || `Cookie connect failed (${res.status})`);
+    const errMsg = data.error || data.message || data.detail || JSON.stringify(data);
+    logger.error(`[Unipile] Cookie connect failed (${res.status}): ${errMsg}`);
+    throw new Error(errMsg);
   }
 
   const accountId = data.id || data.account_id || '';
