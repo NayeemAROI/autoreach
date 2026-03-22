@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Sidebar from './components/Sidebar'
@@ -22,6 +22,28 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import ForgotPassword from './pages/ForgotPassword'
 import Onboarding from './pages/Onboarding'
+
+// ─── New Dashboard System ───
+import AdminLayout from './app/admin/AdminLayout'
+import AdminOverviewPage from './app/admin/overview/AdminOverviewPage'
+import AdminUsersPage from './app/admin/users/AdminUsersPage'
+import AdminWorkspacesPage from './app/admin/workspaces/AdminWorkspacesPage'
+import AdminCampaignMonitorPage from './app/admin/campaign-monitor/AdminCampaignMonitorPage'
+import AdminBillingPage from './app/admin/billing/AdminBillingPage'
+import AdminIntegrationsPage from './app/admin/integrations/AdminIntegrationsPage'
+import AdminSystemHealthPage from './app/admin/system-health/AdminSystemHealthPage'
+import AdminAuditLogsPage from './app/admin/audit-logs/AdminAuditLogsPage'
+import AdminSettingsPage from './app/admin/settings/AdminSettingsPage'
+import OwnerLayout from './app/owner/OwnerLayout'
+import OwnerDashboardPage from './app/owner/dashboard/OwnerDashboardPage'
+import OwnerCampaignsPage from './app/owner/campaigns/OwnerCampaignsPage'
+import OwnerCampaignDetailPage from './app/owner/campaigns/OwnerCampaignDetailPage'
+import OwnerLeadsPage from './app/owner/leads/OwnerLeadsPage'
+import OwnerInboxPage from './app/owner/inbox/OwnerInboxPage'
+import OwnerTeamPage from './app/owner/team/OwnerTeamPage'
+import OwnerLinkedInPage from './app/owner/linkedin/OwnerLinkedInPage'
+import OwnerBillingPage from './app/owner/billing/OwnerBillingPage'
+import OwnerSettingsPage from './app/owner/settings/OwnerSettingsPage'
 
 // Layout wrapper for authenticated pages to include the Sidebar
 function DashboardLayout({ children }) {
@@ -59,7 +81,35 @@ function App() {
             </ProtectedRoute>
           } />
 
-          {/* Protected Routes */}
+          {/* ═══════ NEW: Super Admin Panel ═══════ */}
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<Navigate to="/admin/overview" replace />} />
+            <Route path="overview" element={<AdminOverviewPage />} />
+            <Route path="users" element={<AdminUsersPage />} />
+            <Route path="workspaces" element={<AdminWorkspacesPage />} />
+            <Route path="campaign-monitor" element={<AdminCampaignMonitorPage />} />
+            <Route path="billing" element={<AdminBillingPage />} />
+            <Route path="integrations" element={<AdminIntegrationsPage />} />
+            <Route path="system-health" element={<AdminSystemHealthPage />} />
+            <Route path="audit-logs" element={<AdminAuditLogsPage />} />
+            <Route path="settings" element={<AdminSettingsPage />} />
+          </Route>
+
+          {/* ═══════ NEW: Owner Panel ═══════ */}
+          <Route path="/owner" element={<OwnerLayout />}>
+            <Route index element={<Navigate to="/owner/dashboard" replace />} />
+            <Route path="dashboard" element={<OwnerDashboardPage />} />
+            <Route path="campaigns" element={<OwnerCampaignsPage />} />
+            <Route path="campaigns/:id" element={<OwnerCampaignDetailPage />} />
+            <Route path="leads" element={<OwnerLeadsPage />} />
+            <Route path="inbox" element={<OwnerInboxPage />} />
+            <Route path="team" element={<OwnerTeamPage />} />
+            <Route path="linkedin" element={<OwnerLinkedInPage />} />
+            <Route path="billing" element={<OwnerBillingPage />} />
+            <Route path="settings" element={<OwnerSettingsPage />} />
+          </Route>
+
+          {/* ═══════ Legacy Protected Routes ═══════ */}
           <Route path="/" element={
             <ProtectedRoute>
               <DashboardLayout><Dashboard /></DashboardLayout>
@@ -128,11 +178,6 @@ function App() {
           <Route path="/workspace/settings" element={
             <ProtectedRoute>
               <DashboardLayout><WorkspaceSettings /></DashboardLayout>
-            </ProtectedRoute>
-          } />
-          <Route path="/admin" element={
-            <ProtectedRoute>
-              <DashboardLayout><AdminPanel /></DashboardLayout>
             </ProtectedRoute>
           } />
         </Routes>
