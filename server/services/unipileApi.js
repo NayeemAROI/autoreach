@@ -50,17 +50,15 @@ async function getAccountIdDynamic(wsId) {
   const stored = getAccountId(wsId);
   if (stored) return stored;
   
-  // Only fetch from Unipile if no workspace specified (legacy fallback)
-  if (!wsId) {
-    try {
-      const accounts = await unipileFetch('/accounts');
-      const linkedin = (accounts.items || []).find(a => a.type === 'LINKEDIN');
-      if (linkedin?.id) {
-        setAccountId(linkedin.id);
-        return linkedin.id;
-      }
-    } catch {}
-  }
+  // Auto-discover from Unipile if no stored account ID
+  try {
+    const accounts = await unipileFetch('/accounts');
+    const linkedin = (accounts.items || []).find(a => a.type === 'LINKEDIN');
+    if (linkedin?.id) {
+      setAccountId(linkedin.id, wsId); // Save for this workspace too
+      return linkedin.id;
+    }
+  } catch {}
   
   return '';
 }
