@@ -32,6 +32,29 @@ router.get('/status', authenticate, async (req, res) => {
       }
     }
 
+    // Fallback: check Unipile directly for any LinkedIn account (handles accounts connected outside the app)
+    try {
+      const accounts = await unipile.listAccounts();
+      const items = accounts.items || [];
+      const linkedin = items.find(a => a.type === 'LINKEDIN');
+      if (linkedin && linkedin.id) {
+        // Auto-save this account ID so future checks are fast
+        unipile.setAccountId(linkedin.id, wsId);
+        console.log(`[Integrations] Auto-discovered Unipile account ${linkedin.id} for workspace ${wsId}`);
+        
+        return res.json({
+          connected: true,
+          connectedAt: new Date().toISOString(),
+          profileName: linkedin.name || 'LinkedIn Profile',
+          profileUrl: '',
+          method: 'unipile',
+          accountId: linkedin.id
+        });
+      }
+    } catch (discoverErr) {
+      console.warn('[Integrations] Unipile discovery fallback failed:', discoverErr.message);
+    }
+
     res.json({
       connected: false,
       connectedAt: null,
