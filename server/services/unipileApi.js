@@ -213,9 +213,15 @@ async function healthCheck(wsId) {
       // Check specific account status
       try {
         const data = await unipileFetch(`/accounts/${accountId}`);
-        const source = (data.sources || []).find(s => s.status === 'OK');
-        if (!source) return { ok: false, error: 'LinkedIn account not active' };
-        return { ok: true, accountId: data.id, name: data.name };
+        // Accept any non-error status — newly connected accounts may still be initializing
+        const validStatuses = ['OK', 'CREATION', 'CREDENTIALS', 'CONNECTED'];
+        const source = (data.sources || []).find(s => validStatuses.includes(s.status));
+        if (!source && data.sources?.length > 0) {
+          const actualStatus = data.sources.map(s => s.status).join(', ');
+          return { ok: false, error: `LinkedIn account status: ${actualStatus}` };
+        }
+        // If no sources yet but account exists, still treat as connected (initializing)
+        return { ok: true, accountId: data.id, name: data.name, status: source?.status || 'initializing' };
       } catch {
         return { ok: false, error: 'Account not found or expired' };
       }
@@ -227,8 +233,11 @@ async function healthCheck(wsId) {
     const linkedin = items.find(a => a.type === 'LINKEDIN');
     if (!linkedin) return { ok: false, error: 'No LinkedIn account connected in Unipile' };
     
-    const source = (linkedin.sources || []).find(s => s.status === 'OK');
-    if (!source) return { ok: false, error: 'LinkedIn account not active in Unipile' };
+    const validStatuses = ['OK', 'CREATION', 'CREDENTIALS', 'CONNECTED'];
+    const source = (linkedin.sources || []).find(s => validStatuses.includes(s.status));
+    if (!source && linkedin.sources?.length > 0) {
+      return { ok: false, error: 'LinkedIn account not active in Unipile' };
+    }
     
     return { ok: true, accountId: linkedin.id, name: linkedin.name };
   } catch (err) {
