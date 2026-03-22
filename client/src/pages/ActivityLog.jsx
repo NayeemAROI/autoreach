@@ -52,7 +52,7 @@ function formatTime(dateStr) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-export default function ActivityLog() {
+export default function ActivityLog({ isAdminView = false }) {
   const { token } = useAuth()
   const [logs, setLogs] = useState([])
   const [total, setTotal] = useState(0)
@@ -75,7 +75,10 @@ export default function ActivityLog() {
         const prefixMap = { Auth: 'auth', Leads: 'lead', Campaigns: 'campaign', Workspace: 'workspace', Integration: 'integration' }
         params.set('action', prefixMap[category] || '')
       }
-      const res = await apiFetch(`/api/audit-log?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      
+      const endpoint = isAdminView ? `/api/admin/audit-log?${params}` : `/api/audit-log?${params}`
+      const res = await apiFetch(endpoint, { headers: { Authorization: `Bearer ${token}` } })
+      
       const data = await res.json()
       setLogs(data.logs || [])
       setTotal(data.total || 0)
@@ -88,15 +91,15 @@ export default function ActivityLog() {
   const totalPages = Math.ceil(total / limit)
 
   return (
-    <div className="p-8 max-w-5xl mx-auto">
+    <div className={isAdminView ? "w-full" : "p-8 max-w-5xl mx-auto"}>
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-text-primary flex items-center gap-3">
-            <Activity className="w-7 h-7 text-primary" />
-            Activity Log
+          <h1 className={`${isAdminView ? 'text-xl' : 'text-2xl'} font-bold text-text-primary flex items-center gap-3`}>
+            <Activity className={`${isAdminView ? 'w-6 h-6 text-amber-500' : 'w-7 h-7 text-primary'}`} />
+            {isAdminView ? 'Global Activity Log' : 'Activity Log'}
           </h1>
-          <p className="text-sm text-text-muted mt-1">{total} events tracked</p>
+          <p className="text-sm text-text-muted mt-1">{total} events tracked system-wide</p>
         </div>
         <button
           onClick={() => setShowFilters(!showFilters)}
@@ -181,8 +184,8 @@ export default function ActivityLog() {
                 {/* Time + User */}
                 <div className="text-right shrink-0">
                   <p className="text-xs text-text-muted">{formatTime(log.created_at)}</p>
-                  {log.userName && (
-                    <p className="text-[10px] text-text-muted/60 mt-0.5">{log.userName}</p>
+                  {(log.userName || isAdminView) && (
+                    <p className="text-[10px] text-text-muted/60 mt-0.5" title={log.userEmail}>{log.userName || 'System/Unknown'}</p>
                   )}
                 </div>
               </div>

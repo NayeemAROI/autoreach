@@ -73,4 +73,22 @@ router.get('/stats', (req, res) => {
   }
 });
 
+// GET /api/admin/audit-log — Global audit trail for Super Admin
+router.get('/audit-log', (req, res) => {
+  const { action, limit = 50, offset = 0 } = req.query;
+  try {
+    const { getLogs } = require('../services/auditLog');
+    const result = getLogs({
+      userId: undefined,      // No user filter (global)
+      workspaceId: undefined, // No workspace filter (global)
+      action: action || undefined,
+      limit: Math.min(parseInt(limit) || 50, 500),
+      offset: parseInt(offset) || 0
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

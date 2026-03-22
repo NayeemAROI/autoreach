@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Users, Shield, BarChart3, Key, Trash2, RefreshCw, Eye, EyeOff, Copy, CheckCircle2, AlertCircle } from 'lucide-react'
 import { apiFetch } from '../utils/api'
+import ActivityLog from './ActivityLog'
 
 export default function AdminPanel() {
   const [users, setUsers] = useState([])
@@ -237,6 +238,11 @@ export default function AdminPanel() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Global Activity Log */}
+      <div className="bg-bg-surface border border-border/50 rounded-xl overflow-hidden shadow-sm p-6">
+        <ActivityLog isAdminView={true} />
       </div>
 
       {/* Reset Password Modal */}
