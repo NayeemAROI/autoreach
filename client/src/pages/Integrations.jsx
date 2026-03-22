@@ -68,7 +68,9 @@ export default function Integrations() {
         setPassword('')
         fetchStatus()
       } else {
-        setMessage({ type: 'error', text: data.error || 'Login failed.' })
+        // Login failed — auto-show cookie input as fallback
+        setShowCookieInput(true)
+        setMessage({ type: 'error', text: (data.error || 'Login failed.') + ' Use the li_at cookie method below instead — it\'s more reliable.' })
       }
     } catch (err) {
       setMessage({ type: 'error', text: 'Network error. Is the server running?' })
