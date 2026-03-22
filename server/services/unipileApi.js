@@ -466,43 +466,31 @@ async function syncInbox(wsId, userId) {
   const chats = data.items || [];
   logger.info(`[Unipile] Fetched ${chats.length} conversations`);
 
-  // Log first chat structure for debugging
-  if (chats.length > 0) {
-    logger.info(`[Unipile] Sample chat structure: ${JSON.stringify(chats[0]).substring(0, 800)}`);
-  }
-
   const { v4: uuidv4 } = require('uuid');
   let messageCount = 0;
   let newConversations = 0;
 
   for (const chat of chats.slice(0, 30)) {
     try {
-      // Extract participant name — try many Unipile field variations
-      let participantName = 'Unknown';
+      // Fetch attendees from the separate endpoint (Unipile doesn't include them in chat object)
+      let participantName = chat.name || 'Unknown';
       let participantUrl = '';
 
-      // Method 1: From chat.attendees array
-      const attendees = chat.attendees || chat.participants || [];
-      if (attendees.length > 0) {
-        // Find the other person (not us)
-        const other = attendees.find(a => {
-          const id = a.provider_id || a.id || a.account_id || '';
-          return id !== accountId;
-        }) || attendees[0];
+      try {
+        const attendeesData = await unipileFetch(`/chats/${chat.id}/attendees`);
+        const attendees = attendeesData.items || attendeesData || [];
         
-        participantName = other.display_name || other.name || other.full_name 
-          || (other.first_name ? `${other.first_name} ${other.last_name || ''}`.trim() : '')
-          || other.username || 'Unknown';
+        // Find the other person (is_self === 0 means it's not us)
+        const other = attendees.find(a => a.is_self === 0 || a.is_self === false) || {};
         
-        const pid = other.provider_id || other.id || other.public_identifier || '';
-        if (pid && pid !== accountId) {
-          participantUrl = pid.startsWith('http') ? pid : `https://www.linkedin.com/in/${pid}`;
+        if (other.name) participantName = other.name;
+        if (other.profile_url) {
+          participantUrl = other.profile_url;
+        } else if (other.provider_id) {
+          participantUrl = `https://www.linkedin.com/in/${other.provider_id}`;
         }
-      }
-
-      // Method 2: From chat-level fields
-      if (participantName === 'Unknown') {
-        participantName = chat.name || chat.title || chat.display_name || 'Unknown';
+      } catch (attErr) {
+        logger.warn(`[Unipile] Could not fetch attendees for chat ${chat.id}: ${attErr.message}`);
       }
 
       // Find or create conversation
@@ -529,16 +517,16 @@ async function syncInbox(wsId, userId) {
           logger.warn(`[Unipile] Failed to create conversation: ${insertErr.message}`);
           continue;
         }
+      } else {
+        // Update existing conversation name if it was Unknown
+        if (participantName !== 'Unknown') {
+          db.prepare('UPDATE conversations SET participantName = ? WHERE id = ? AND participantName = ?').run(participantName, conv.id, 'Unknown');
+        }
       }
 
       // Fetch messages for this chat
       const msgs = await unipileFetch(`/chats/${chat.id}/messages?limit=15`);
       const items = msgs.items || [];
-
-      // Log first message structure for debugging
-      if (items.length > 0 && messageCount === 0) {
-        logger.info(`[Unipile] Sample message structure: ${JSON.stringify(items[0]).substring(0, 500)}`);
-      }
 
       let latestMessage = '';
       let latestTimestamp = '1970-01-01T00:00:00Z';
@@ -552,22 +540,12 @@ async function syncInbox(wsId, userId) {
           if (existing) continue;
         }
 
-        // Determine direction
-        const senderInfo = msg.sender || {};
-        const senderId = senderInfo.provider_id || senderInfo.id || senderInfo.account_id || '';
-        const isOutbound = msg.is_sender || senderId === accountId;
+        // Determine direction — use is_sender field from Unipile
+        const isOutbound = msg.is_sender === 1 || msg.is_sender === true;
         const direction = isOutbound ? 'outbound' : 'inbound';
         
-        // Extract sender name from message (fallback to update participant name)
-        const msgSenderName = senderInfo.display_name || senderInfo.name 
-          || (senderInfo.first_name ? `${senderInfo.first_name} ${senderInfo.last_name || ''}`.trim() : '');
-        
-        if (!isOutbound && msgSenderName && participantName === 'Unknown') {
-          participantName = msgSenderName;
-          // Update the conversation's participant name
-          db.prepare('UPDATE conversations SET participantName = ? WHERE id = ?').run(participantName, conv.id);
-        }
-
+        // Sender name from message
+        const msgSenderName = msg.sender_name || msg.sender?.name || '';
         const senderName = isOutbound ? 'You' : (msgSenderName || participantName);
         const content = msg.text || msg.body || msg.text_content || '';
         const timestamp = msg.timestamp || msg.date || msg.created_at || new Date().toISOString();
@@ -579,7 +557,7 @@ async function syncInbox(wsId, userId) {
           `).run(uuidv4(), conv.id, userId, direction, content, senderName, msgLinkedInId, timestamp);
           messageCount++;
 
-          // Track latest message for conversation update
+          // Track latest message
           if (content && timestamp > latestTimestamp) {
             latestMessage = content.substring(0, 200);
             latestTimestamp = timestamp;
@@ -593,7 +571,7 @@ async function syncInbox(wsId, userId) {
         }
       }
 
-      // Update conversation with the latest message (unconditional)
+      // Update conversation with the latest message
       if (latestMessage) {
         db.prepare("UPDATE conversations SET lastMessage = ?, lastMessageAt = ? WHERE id = ?")
           .run(latestMessage, latestTimestamp, conv.id);

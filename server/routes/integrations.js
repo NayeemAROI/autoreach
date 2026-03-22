@@ -218,11 +218,21 @@ router.post('/disconnect', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/integrations/sync-inbox - Trigger server-side inbox sync via Unipile
+// POST /api/integrations/sync-inbox - Clear old data and sync fresh from Unipile
 router.post('/sync-inbox', authenticate, async (req, res) => {
   try {
     const wsId = getWsId(req.user.id);
-    console.log(`[Integrations] Starting inbox sync for user ${req.user.id}, workspace ${wsId}...`);
+    console.log(`[Integrations] Clearing and re-syncing inbox for user ${req.user.id}, workspace ${wsId}...`);
+    
+    // Clear old conversations and messages for this user/workspace
+    const convIds = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND workspace_id = ?').all(req.user.id, wsId);
+    for (const c of convIds) {
+      db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(c.id);
+    }
+    db.prepare('DELETE FROM conversations WHERE user_id = ? AND workspace_id = ?').run(req.user.id, wsId);
+    console.log(`[Integrations] Cleared ${convIds.length} old conversations`);
+
+    // Fresh sync from Unipile
     const unipile = require('../services/unipileApi');
     const result = await unipile.syncInbox(wsId, req.user.id);
     logAction(req, 'integration.inbox_synced', 'integration', '', '', { messages: result.messages, conversations: result.conversations });
