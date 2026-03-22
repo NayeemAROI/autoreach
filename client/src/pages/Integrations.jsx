@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { ShieldCheck, ShieldAlert, Key, RefreshCw, Unplug, CheckCircle2, AlertCircle, Loader2, MessageSquare, HelpCircle, Mail, Lock, Shield, Clock } from 'lucide-react'
+import { ShieldCheck, ShieldAlert, Key, RefreshCw, Unplug, CheckCircle2, AlertCircle, Loader2, MessageSquare, HelpCircle, Mail, Lock, Shield, Clock, Globe, ChevronDown } from 'lucide-react'
 import { apiFetch } from '../utils/api'
 
 export default function Integrations() {
@@ -12,6 +12,7 @@ export default function Integrations() {
   // LinkedIn login form
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [proxyCountry, setProxyCountry] = useState('bd')
 
   // 2FA / Checkpoint
   const [checkpoint, setCheckpoint] = useState(null) // { accountId, type, message }
@@ -138,7 +139,7 @@ export default function Integrations() {
       const res = await apiFetch('/api/integrations/connect-linkedin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: email.trim(), password: password.trim() })
+        body: JSON.stringify({ username: email.trim(), password: password.trim(), proxyCountry })
       })
       const data = await res.json()
       
@@ -223,7 +224,7 @@ export default function Integrations() {
       const res = await apiFetch('/api/integrations/connect-cookie', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ li_at: cookieInput.trim() })
+        body: JSON.stringify({ li_at: cookieInput.trim(), proxyCountry })
       })
       const data = await res.json()
       if (res.ok) {
@@ -536,6 +537,24 @@ export default function Integrations() {
                 />
               </div>
 
+              <div className="relative">
+                <Globe className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                <select
+                  value={proxyCountry}
+                  onChange={(e) => setProxyCountry(e.target.value)}
+                  className="w-full pl-10 pr-10 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary focus:outline-none focus:border-primary transition-colors appearance-none cursor-pointer"
+                >
+                  <option value="bd">Bangladesh (BD)</option>
+                  <option value="us">United States (US)</option>
+                  <option value="gb">United Kingdom (GB)</option>
+                  <option value="ca">Canada (CA)</option>
+                  <option value="au">Australia (AU)</option>
+                  <option value="in">India (IN)</option>
+                  <option value="sg">Singapore (SG)</option>
+                </select>
+                <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              </div>
+
               <button
                 onClick={handleLinkedInLogin}
                 disabled={connecting || !email.trim() || !password.trim()}
@@ -577,6 +596,20 @@ export default function Integrations() {
                     onChange={(e) => setCookieInput(e.target.value)}
                     className="flex-1 px-3 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary transition-colors"
                   />
+                  <div className="relative w-[130px] shrink-0">
+                    <Globe className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                    <select
+                      value={proxyCountry}
+                      onChange={(e) => setProxyCountry(e.target.value)}
+                      className="w-full h-full pl-8 pr-7 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary focus:outline-none focus:border-primary transition-colors appearance-none cursor-pointer"
+                    >
+                      <option value="bd">BD Proxy</option>
+                      <option value="us">US Proxy</option>
+                      <option value="gb">UK Proxy</option>
+                      <option value="in">IN Proxy</option>
+                    </select>
+                    <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                  </div>
                   <button
                     onClick={handleCookieConnect}
                     disabled={connecting || !cookieInput.trim()}

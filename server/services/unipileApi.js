@@ -247,9 +247,42 @@ async function healthCheck(wsId) {
  * Connect a LinkedIn account using email/password via Unipile
  * Returns: { success, accountId } or { checkpoint, accountId, type }
  */
-async function connectLinkedIn(username, password) {
+
+/**
+ * Get proxy config for Unipile account creation (residential IP)
+ */
+function getProxyConfig(countryCode = 'bd') {
+  const host = process.env.PROXY_HOST || 'geo.iproyal.com';
+  const port = parseInt(process.env.PROXY_PORT || '12321');
+  const user = process.env.PROXY_USER || '6irlNOIFopruAF3N';
+  const basePass = process.env.PROXY_PASS_BASE || 'CRIxa5PpT7UoSQVV';
+  
+  if (!host || !user) return null;
+  
+  // IPRoyal uses _country-XX suffix for geo-targeting
+  const pass = `${basePass}_country-${countryCode.toLowerCase()}`;
+  
+  return {
+    protocol: 'HTTP',
+    domain: host,
+    port: port,
+    username: user,
+    password: pass
+  };
+}
+
+async function connectLinkedIn(username, password, proxyCountry = 'bd') {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('Unipile API key not configured');
+
+  const proxy = getProxyConfig(proxyCountry);
+  const bodyObj = {
+    provider: 'LINKEDIN',
+    username: username,
+    password: password,
+  };
+  if (proxy) bodyObj.proxy = proxy;
+  logger.info(`[Unipile] Connecting LinkedIn with proxy: ${proxy ? proxy.domain + ':' + proxy.port : 'none'}`);
 
   const url = `${UNIPILE_BASE}/accounts`;
   const res = await fetch(url, {
@@ -259,11 +292,7 @@ async function connectLinkedIn(username, password) {
       'accept': 'application/json',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      provider: 'LINKEDIN',
-      username: username,
-      password: password,
-    }),
+    body: JSON.stringify(bodyObj),
   });
 
   let data;
@@ -330,7 +359,7 @@ async function connectLinkedIn(username, password) {
 /**
  * Connect LinkedIn account using a li_at cookie via Unipile
  */
-async function connectWithCookie(liAtCookie) {
+async function connectWithCookie(liAtCookie, proxyCountry = 'bd') {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('Unipile API key not configured');
 
@@ -345,6 +374,7 @@ async function connectWithCookie(liAtCookie) {
     body: JSON.stringify({
       provider: 'LINKEDIN',
       access_token: liAtCookie,
+      ...(getProxyConfig(proxyCountry) ? { proxy: getProxyConfig(proxyCountry) } : {}),
     }),
   });
 

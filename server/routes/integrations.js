@@ -70,16 +70,16 @@ router.get('/status', authenticate, async (req, res) => {
 // POST /api/integrations/connect-linkedin - Login with LinkedIn credentials via Unipile
 router.post('/connect-linkedin', authenticate, async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, proxyCountry } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: 'Email and password are required.' });
     }
 
     const wsId = getWsId(req.user.id);
     const unipile = require('../services/unipileApi');
-    console.log(`[Integrations] Connecting LinkedIn for workspace ${wsId}...`);
+    console.log(`[Integrations] Connecting LinkedIn for workspace ${wsId} (proxy: ${proxyCountry || 'bd'})...`);
     
-    const result = await unipile.connectLinkedIn(username, password);
+    const result = await unipile.connectLinkedIn(username, password, proxyCountry || 'bd');
 
     if (result.checkpoint) {
       return res.json({
@@ -150,17 +150,17 @@ router.post('/solve-checkpoint', authenticate, async (req, res) => {
 // POST /api/integrations/connect-cookie - Save & validate a li_at cookie
 router.post('/connect-cookie', authenticate, async (req, res) => {
   try {
-    const { li_at } = req.body;
+    const { li_at, proxyCountry } = req.body;
     if (!li_at || typeof li_at !== 'string' || li_at.trim().length < 10) {
       return res.status(400).json({ error: 'Please provide a valid li_at cookie value.' });
     }
 
     const wsId = getWsId(req.user.id);
     const trimmed = li_at.trim();
-    console.log(`[Integrations] Connecting via cookie for workspace ${wsId}...`);
+    console.log(`[Integrations] Connecting via cookie for workspace ${wsId} (proxy: ${proxyCountry || 'bd'})...`);
     
     const unipile = require('../services/unipileApi');
-    const result = await unipile.connectWithCookie(trimmed);
+    const result = await unipile.connectWithCookie(trimmed, proxyCountry || 'bd');
 
     // Save account ID for this workspace
     if (result.accountId) {
