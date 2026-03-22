@@ -2,6 +2,133 @@ import { useState, useEffect, useRef } from 'react'
 import { ShieldCheck, ShieldAlert, Key, RefreshCw, Unplug, CheckCircle2, AlertCircle, Loader2, MessageSquare, HelpCircle, Mail, Lock, Shield, Clock, Globe, ChevronDown } from 'lucide-react'
 import { apiFetch } from '../utils/api'
 
+const PROXY_COUNTRIES = [
+  { code: 'none', label: 'No Proxy (Direct)', short: 'No Proxy' },
+  { code: 'af', label: 'Afghanistan (AF)', short: 'AF' },
+  { code: 'al', label: 'Albania (AL)', short: 'AL' },
+  { code: 'dz', label: 'Algeria (DZ)', short: 'DZ' },
+  { code: 'ar', label: 'Argentina (AR)', short: 'AR' },
+  { code: 'am', label: 'Armenia (AM)', short: 'AM' },
+  { code: 'au', label: 'Australia (AU)', short: 'AU' },
+  { code: 'at', label: 'Austria (AT)', short: 'AT' },
+  { code: 'az', label: 'Azerbaijan (AZ)', short: 'AZ' },
+  { code: 'bh', label: 'Bahrain (BH)', short: 'BH' },
+  { code: 'bd', label: 'Bangladesh (BD)', short: 'BD' },
+  { code: 'by', label: 'Belarus (BY)', short: 'BY' },
+  { code: 'be', label: 'Belgium (BE)', short: 'BE' },
+  { code: 'bo', label: 'Bolivia (BO)', short: 'BO' },
+  { code: 'ba', label: 'Bosnia (BA)', short: 'BA' },
+  { code: 'br', label: 'Brazil (BR)', short: 'BR' },
+  { code: 'bn', label: 'Brunei (BN)', short: 'BN' },
+  { code: 'bg', label: 'Bulgaria (BG)', short: 'BG' },
+  { code: 'kh', label: 'Cambodia (KH)', short: 'KH' },
+  { code: 'cm', label: 'Cameroon (CM)', short: 'CM' },
+  { code: 'ca', label: 'Canada (CA)', short: 'CA' },
+  { code: 'cl', label: 'Chile (CL)', short: 'CL' },
+  { code: 'cn', label: 'China (CN)', short: 'CN' },
+  { code: 'co', label: 'Colombia (CO)', short: 'CO' },
+  { code: 'cr', label: 'Costa Rica (CR)', short: 'CR' },
+  { code: 'hr', label: 'Croatia (HR)', short: 'HR' },
+  { code: 'cu', label: 'Cuba (CU)', short: 'CU' },
+  { code: 'cy', label: 'Cyprus (CY)', short: 'CY' },
+  { code: 'cz', label: 'Czech Republic (CZ)', short: 'CZ' },
+  { code: 'dk', label: 'Denmark (DK)', short: 'DK' },
+  { code: 'do', label: 'Dominican Rep. (DO)', short: 'DO' },
+  { code: 'ec', label: 'Ecuador (EC)', short: 'EC' },
+  { code: 'eg', label: 'Egypt (EG)', short: 'EG' },
+  { code: 'sv', label: 'El Salvador (SV)', short: 'SV' },
+  { code: 'ee', label: 'Estonia (EE)', short: 'EE' },
+  { code: 'et', label: 'Ethiopia (ET)', short: 'ET' },
+  { code: 'fi', label: 'Finland (FI)', short: 'FI' },
+  { code: 'fr', label: 'France (FR)', short: 'FR' },
+  { code: 'ge', label: 'Georgia (GE)', short: 'GE' },
+  { code: 'de', label: 'Germany (DE)', short: 'DE' },
+  { code: 'gh', label: 'Ghana (GH)', short: 'GH' },
+  { code: 'gr', label: 'Greece (GR)', short: 'GR' },
+  { code: 'gt', label: 'Guatemala (GT)', short: 'GT' },
+  { code: 'hn', label: 'Honduras (HN)', short: 'HN' },
+  { code: 'hk', label: 'Hong Kong (HK)', short: 'HK' },
+  { code: 'hu', label: 'Hungary (HU)', short: 'HU' },
+  { code: 'is', label: 'Iceland (IS)', short: 'IS' },
+  { code: 'in', label: 'India (IN)', short: 'IN' },
+  { code: 'id', label: 'Indonesia (ID)', short: 'ID' },
+  { code: 'ir', label: 'Iran (IR)', short: 'IR' },
+  { code: 'iq', label: 'Iraq (IQ)', short: 'IQ' },
+  { code: 'ie', label: 'Ireland (IE)', short: 'IE' },
+  { code: 'il', label: 'Israel (IL)', short: 'IL' },
+  { code: 'it', label: 'Italy (IT)', short: 'IT' },
+  { code: 'jm', label: 'Jamaica (JM)', short: 'JM' },
+  { code: 'jp', label: 'Japan (JP)', short: 'JP' },
+  { code: 'jo', label: 'Jordan (JO)', short: 'JO' },
+  { code: 'kz', label: 'Kazakhstan (KZ)', short: 'KZ' },
+  { code: 'ke', label: 'Kenya (KE)', short: 'KE' },
+  { code: 'kw', label: 'Kuwait (KW)', short: 'KW' },
+  { code: 'kg', label: 'Kyrgyzstan (KG)', short: 'KG' },
+  { code: 'la', label: 'Laos (LA)', short: 'LA' },
+  { code: 'lv', label: 'Latvia (LV)', short: 'LV' },
+  { code: 'lb', label: 'Lebanon (LB)', short: 'LB' },
+  { code: 'lt', label: 'Lithuania (LT)', short: 'LT' },
+  { code: 'lu', label: 'Luxembourg (LU)', short: 'LU' },
+  { code: 'mo', label: 'Macau (MO)', short: 'MO' },
+  { code: 'my', label: 'Malaysia (MY)', short: 'MY' },
+  { code: 'mv', label: 'Maldives (MV)', short: 'MV' },
+  { code: 'mx', label: 'Mexico (MX)', short: 'MX' },
+  { code: 'md', label: 'Moldova (MD)', short: 'MD' },
+  { code: 'mn', label: 'Mongolia (MN)', short: 'MN' },
+  { code: 'me', label: 'Montenegro (ME)', short: 'ME' },
+  { code: 'ma', label: 'Morocco (MA)', short: 'MA' },
+  { code: 'mz', label: 'Mozambique (MZ)', short: 'MZ' },
+  { code: 'mm', label: 'Myanmar (MM)', short: 'MM' },
+  { code: 'np', label: 'Nepal (NP)', short: 'NP' },
+  { code: 'nl', label: 'Netherlands (NL)', short: 'NL' },
+  { code: 'nz', label: 'New Zealand (NZ)', short: 'NZ' },
+  { code: 'ni', label: 'Nicaragua (NI)', short: 'NI' },
+  { code: 'ng', label: 'Nigeria (NG)', short: 'NG' },
+  { code: 'mk', label: 'North Macedonia (MK)', short: 'MK' },
+  { code: 'no', label: 'Norway (NO)', short: 'NO' },
+  { code: 'om', label: 'Oman (OM)', short: 'OM' },
+  { code: 'pk', label: 'Pakistan (PK)', short: 'PK' },
+  { code: 'pa', label: 'Panama (PA)', short: 'PA' },
+  { code: 'py', label: 'Paraguay (PY)', short: 'PY' },
+  { code: 'pe', label: 'Peru (PE)', short: 'PE' },
+  { code: 'ph', label: 'Philippines (PH)', short: 'PH' },
+  { code: 'pl', label: 'Poland (PL)', short: 'PL' },
+  { code: 'pt', label: 'Portugal (PT)', short: 'PT' },
+  { code: 'pr', label: 'Puerto Rico (PR)', short: 'PR' },
+  { code: 'qa', label: 'Qatar (QA)', short: 'QA' },
+  { code: 'ro', label: 'Romania (RO)', short: 'RO' },
+  { code: 'ru', label: 'Russia (RU)', short: 'RU' },
+  { code: 'sa', label: 'Saudi Arabia (SA)', short: 'SA' },
+  { code: 'sn', label: 'Senegal (SN)', short: 'SN' },
+  { code: 'rs', label: 'Serbia (RS)', short: 'RS' },
+  { code: 'sg', label: 'Singapore (SG)', short: 'SG' },
+  { code: 'sk', label: 'Slovakia (SK)', short: 'SK' },
+  { code: 'si', label: 'Slovenia (SI)', short: 'SI' },
+  { code: 'za', label: 'South Africa (ZA)', short: 'ZA' },
+  { code: 'kr', label: 'South Korea (KR)', short: 'KR' },
+  { code: 'es', label: 'Spain (ES)', short: 'ES' },
+  { code: 'lk', label: 'Sri Lanka (LK)', short: 'LK' },
+  { code: 'se', label: 'Sweden (SE)', short: 'SE' },
+  { code: 'ch', label: 'Switzerland (CH)', short: 'CH' },
+  { code: 'tw', label: 'Taiwan (TW)', short: 'TW' },
+  { code: 'tj', label: 'Tajikistan (TJ)', short: 'TJ' },
+  { code: 'tz', label: 'Tanzania (TZ)', short: 'TZ' },
+  { code: 'th', label: 'Thailand (TH)', short: 'TH' },
+  { code: 'tn', label: 'Tunisia (TN)', short: 'TN' },
+  { code: 'tr', label: 'Turkey (TR)', short: 'TR' },
+  { code: 'tm', label: 'Turkmenistan (TM)', short: 'TM' },
+  { code: 'ua', label: 'Ukraine (UA)', short: 'UA' },
+  { code: 'ae', label: 'UAE (AE)', short: 'AE' },
+  { code: 'gb', label: 'United Kingdom (GB)', short: 'GB' },
+  { code: 'us', label: 'United States (US)', short: 'US' },
+  { code: 'uy', label: 'Uruguay (UY)', short: 'UY' },
+  { code: 'uz', label: 'Uzbekistan (UZ)', short: 'UZ' },
+  { code: 've', label: 'Venezuela (VE)', short: 'VE' },
+  { code: 'vn', label: 'Vietnam (VN)', short: 'VN' },
+  { code: 'zm', label: 'Zambia (ZM)', short: 'ZM' },
+  { code: 'zw', label: 'Zimbabwe (ZW)', short: 'ZW' },
+]
+
 export default function Integrations() {
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -544,14 +671,9 @@ export default function Integrations() {
                   onChange={(e) => setProxyCountry(e.target.value)}
                   className="w-full pl-10 pr-10 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary focus:outline-none focus:border-primary transition-colors appearance-none cursor-pointer"
                 >
-                  <option value="none">No Proxy (Direct)</option>
-                  <option value="bd">Bangladesh (BD)</option>
-                  <option value="us">United States (US)</option>
-                  <option value="gb">United Kingdom (GB)</option>
-                  <option value="ca">Canada (CA)</option>
-                  <option value="au">Australia (AU)</option>
-                  <option value="in">India (IN)</option>
-                  <option value="sg">Singapore (SG)</option>
+                  {PROXY_COUNTRIES.map(c => (
+                    <option key={c.code} value={c.code}>{c.label}</option>
+                  ))}
                 </select>
                 <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
               </div>
@@ -604,11 +726,9 @@ export default function Integrations() {
                       onChange={(e) => setProxyCountry(e.target.value)}
                       className="w-full h-full pl-8 pr-7 py-2.5 bg-bg-primary rounded-lg border border-border text-sm text-text-primary focus:outline-none focus:border-primary transition-colors appearance-none cursor-pointer"
                     >
-                      <option value="none">No Proxy</option>
-                      <option value="bd">BD Proxy</option>
-                      <option value="us">US Proxy</option>
-                      <option value="gb">UK Proxy</option>
-                      <option value="in">IN Proxy</option>
+                      {PROXY_COUNTRIES.map(c => (
+                        <option key={c.code} value={c.code}>{c.short}</option>
+                      ))}
                     </select>
                     <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
                   </div>
