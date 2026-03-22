@@ -163,14 +163,25 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/integrations/disconnect - Disconnect LinkedIn for this workspace only
+// POST /api/integrations/disconnect - Disconnect LinkedIn for this workspace
 router.post('/disconnect', authenticate, async (req, res) => {
   try {
     const wsId = getWsId(req.user.id);
-    console.log(`[Integrations] Disconnecting LinkedIn for workspace ${wsId} (workspace-scoped only)`);
+    const unipile = require('../services/unipileApi');
+    const accountId = unipile.getAccountId(wsId);
+    console.log(`[Integrations] Disconnecting LinkedIn for workspace ${wsId}, accountId: ${accountId || 'none'}`);
     
-    // Only clear this workspace's stored account ID — do NOT delete from Unipile
-    // Other workspaces may share the same Unipile account
+    // Delete this workspace's specific account from Unipile
+    if (accountId) {
+      try {
+        await unipile.deleteAccount(accountId, wsId);
+        console.log(`[Integrations] Deleted Unipile account ${accountId}`);
+      } catch (err) {
+        console.warn('[Integrations] Unipile disconnect warning:', err.message);
+      }
+    }
+
+    // Clear workspace-scoped account ID setting
     try {
       db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_account_id:${wsId}`);
     } catch {}
@@ -183,7 +194,7 @@ router.post('/disconnect', authenticate, async (req, res) => {
     db.prepare('DELETE FROM conversations WHERE user_id = ? AND workspace_id = ?').run(req.user.id, wsId);
 
     logAction(req, 'integration.linkedin_disconnected', 'integration');
-    res.json({ success: true, message: 'LinkedIn disconnected from this workspace.' });
+    res.json({ success: true, message: 'LinkedIn disconnected.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
