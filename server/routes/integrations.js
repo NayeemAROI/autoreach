@@ -16,43 +16,26 @@ router.get('/status', authenticate, async (req, res) => {
   try {
     const wsId = getWsId(req.user.id);
     const unipile = require('../services/unipileApi');
-    const configured = await unipile.isConfigured(wsId);
     
-    if (configured) {
-      const health = await unipile.healthCheck(wsId);
-      if (health.ok) {
-        return res.json({
-          connected: true,
-          connectedAt: new Date().toISOString(),
-          profileName: health.name || 'LinkedIn Profile',
-          profileUrl: '',
-          method: 'unipile',
-          accountId: health.accountId
-        });
+    // Only check workspace-scoped stored account — NO auto-discovery
+    const accountId = unipile.getAccountId(wsId);
+    
+    if (accountId) {
+      try {
+        const health = await unipile.healthCheck(wsId);
+        if (health.ok) {
+          return res.json({
+            connected: true,
+            connectedAt: new Date().toISOString(),
+            profileName: health.name || 'LinkedIn Profile',
+            profileUrl: '',
+            method: 'unipile',
+            accountId: health.accountId
+          });
+        }
+      } catch (err) {
+        console.warn('[Integrations] Health check failed:', err.message);
       }
-    }
-
-    // Fallback: check Unipile directly for any LinkedIn account (handles accounts connected outside the app)
-    try {
-      const accounts = await unipile.listAccounts();
-      const items = accounts.items || [];
-      const linkedin = items.find(a => a.type === 'LINKEDIN');
-      if (linkedin && linkedin.id) {
-        // Auto-save this account ID so future checks are fast
-        unipile.setAccountId(linkedin.id, wsId);
-        console.log(`[Integrations] Auto-discovered Unipile account ${linkedin.id} for workspace ${wsId}`);
-        
-        return res.json({
-          connected: true,
-          connectedAt: new Date().toISOString(),
-          profileName: linkedin.name || 'LinkedIn Profile',
-          profileUrl: '',
-          method: 'unipile',
-          accountId: linkedin.id
-        });
-      }
-    } catch (discoverErr) {
-      console.warn('[Integrations] Unipile discovery fallback failed:', discoverErr.message);
     }
 
     res.json({
