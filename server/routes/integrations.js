@@ -40,20 +40,32 @@ router.get('/status', authenticate, async (req, res) => {
     const accountId = unipile.getAccountId(wsId);
     
     if (accountId) {
+      // Verify the account is still active on Unipile
       try {
-        const health = await unipile.healthCheck(wsId);
-        if (health.ok) {
+        const apiKey = unipile.getApiKey();
+        const UNIPILE_DSN = process.env.UNIPILE_DSN || 'api23.unipile.com:15371';
+        const url = `https://${UNIPILE_DSN}/api/v1/accounts/${encodeURIComponent(accountId)}`;
+        const resp = await fetch(url, {
+          headers: { 'X-API-KEY': apiKey, 'accept': 'application/json' }
+        });
+        
+        if (resp.ok) {
+          const account = await resp.json();
           return res.json({
             connected: true,
-            connectedAt: new Date().toISOString(),
-            profileName: health.name || 'LinkedIn Profile',
+            connectedAt: account.created_at || new Date().toISOString(),
+            profileName: account.name || 'LinkedIn Profile',
             profileUrl: '',
             method: 'unipile',
-            accountId: health.accountId
+            accountId: accountId
           });
+        } else {
+          // Account no longer valid on Unipile — clean up local setting
+          console.warn(`[Integrations] Account ${accountId} no longer valid on Unipile (${resp.status}), clearing`);
+          try { db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_account_id:${wsId}`); } catch {}
         }
       } catch (err) {
-        console.warn('[Integrations] Health check failed:', err.message);
+        console.warn('[Integrations] Account verification failed:', err.message);
       }
     }
 
