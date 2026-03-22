@@ -1,45 +1,52 @@
-import { PageHeader, SectionHeader } from '@/components/shared/PageHeader'
-import { HealthBadge } from '@/components/shared/StatusBadge'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { HealthBadge, StatusBadge } from '@/components/shared/StatusBadge'
 import { InfoList } from '@/components/shared/ActivityTimeline'
-import { mockIntegrations } from '@/data/mock'
+import { MetricGrid } from '@/components/shared/StatCard'
+import { DataTable } from '@/components/tables/DataTable'
+import { EmptyState } from '@/components/shared/Feedback'
+import { useApi } from '@/hooks/useApi'
 import { formatRelativeTime } from '@/lib/utils'
-import { Plug, RefreshCw, ExternalLink } from 'lucide-react'
+import type { DashboardKPI } from '@/types'
+import { Plug, RefreshCw } from 'lucide-react'
 import { QuickActionButton } from '@/components/shared/AlertStrip'
 
 export default function AdminIntegrationsPage() {
+  const { data: intData, refetch } = useApi<any>('/api/admin/integrations')
+  const integrations = intData?.integrations || []
+  const summary = intData?.summary || {}
+
+  const kpis: DashboardKPI[] = [
+    { label: 'Total Users', value: summary.total || 0, icon: 'Users' },
+    { label: 'Connected', value: summary.connected || 0, icon: 'Link2' },
+    { label: 'Disconnected', value: summary.disconnected || 0, icon: 'Unlink' },
+    { label: 'Issues', value: summary.issues || 0, icon: 'AlertTriangle' },
+  ]
+
   return (
     <div className="space-y-5">
-      <PageHeader title="Integrations" subtitle="External service health and configuration" />
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {mockIntegrations.map(integration => (
-          <div key={integration.slug} className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden">
-            <div className="p-5 border-b border-zinc-800/40">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-zinc-800/80 flex items-center justify-center text-zinc-400">
-                    <Plug className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-semibold text-white">{integration.name}</h3>
-                    <p className="text-[11px] text-zinc-500">{integration.description}</p>
-                  </div>
-                </div>
-                <HealthBadge health={integration.health} />
-              </div>
-            </div>
-            <div className="p-5">
-              <InfoList items={[
-                { label: 'Last Event', value: integration.lastEventAt ? formatRelativeTime(integration.lastEventAt) : 'Never' },
-                { label: 'Failures', value: <span className={integration.failureCount > 5 ? 'text-red-400 font-semibold' : 'text-zinc-300'}>{integration.failureCount}</span> },
-                { label: 'Configured', value: integration.configuredAt ? formatRelativeTime(integration.configuredAt) : 'Not configured' },
-              ]} />
-              <div className="flex gap-2 mt-4">
-                <QuickActionButton icon={<RefreshCw className="w-3.5 h-3.5" />} label="Test" onClick={() => {}} />
-                <QuickActionButton icon={<ExternalLink className="w-3.5 h-3.5" />} label="Config" onClick={() => {}} />
-              </div>
-            </div>
-          </div>
-        ))}
+      <PageHeader title="Integrations" subtitle="LinkedIn integration health across all users">
+        <QuickActionButton icon={<RefreshCw className="w-4 h-4" />} label="Refresh" onClick={refetch} />
+      </PageHeader>
+
+      <MetricGrid metrics={kpis} columns={4} accentColor="text-cyan-400" />
+
+      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden">
+        <DataTable
+          columns={[
+            { key: 'user', header: 'User', render: (i: any) => (
+              <div><div className="text-sm font-medium text-zinc-200">{i.userName}</div><div className="text-[11px] text-zinc-500">{i.userEmail}</div></div>
+            )},
+            { key: 'provider', header: 'Provider', render: (i: any) => <span className="text-sm text-zinc-300">{i.provider}</span> },
+            { key: 'status', header: 'Status', render: (i: any) => <StatusBadge label={i.status} variant={i.status === 'active' ? 'success' : i.status === 'checkpoint' ? 'warning' : 'danger'} /> },
+            { key: 'health', header: 'Health', render: (i: any) => <HealthBadge health={i.health} /> },
+            { key: 'lastSync', header: 'Last Sync', render: (i: any) => <span className="text-xs text-zinc-500">{i.lastSync ? formatRelativeTime(i.lastSync) : 'Never'}</span> },
+          ]}
+          data={integrations}
+          keyExtractor={(i: any) => `${i.userId}-${i.accountId}`}
+        />
+        {integrations.length === 0 && (
+          <EmptyState icon={<Plug className="w-7 h-7" />} title="No integrations" description="No users have connected LinkedIn yet." />
+        )}
       </div>
     </div>
   )

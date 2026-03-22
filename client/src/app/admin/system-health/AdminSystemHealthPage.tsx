@@ -1,57 +1,62 @@
-import { PageHeader, SectionHeader } from '@/components/shared/PageHeader'
-import { HealthBadge, StatusBadge } from '@/components/shared/StatusBadge'
-import { cn } from '@/lib/utils'
-import { HeartPulse, Database, Cpu, Shield, Clock, AlertTriangle, RotateCcw, Terminal } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { PageHeader } from '@/components/shared/PageHeader'
+import { HealthBadge } from '@/components/shared/StatusBadge'
+import { useApi } from '@/hooks/useApi'
+import { Cpu, Database, Terminal, HeartPulse, RotateCcw } from 'lucide-react'
 import { QuickActionButton } from '@/components/shared/AlertStrip'
 import { motion } from 'framer-motion'
 
-const healthCards = [
-  { title: 'Campaign Engine', icon: Cpu, health: 'healthy' as const, metrics: [
-    { label: 'Active Campaigns', value: '34' },
-    { label: 'Last Cron Run', value: '2m ago' },
-    { label: 'Failed Jobs', value: '0' },
-    { label: 'Queue Backlog', value: '12' },
-  ]},
-  { title: 'Database', icon: Database, health: 'healthy' as const, metrics: [
-    { label: 'Avg Latency', value: '8ms' },
-    { label: 'Connections', value: '24/100' },
-    { label: 'Table Size', value: '2.4 GB' },
-    { label: 'Last Backup', value: '6h ago' },
-  ]},
-  { title: 'API Gateway', icon: Terminal, health: 'healthy' as const, metrics: [
-    { label: 'Avg Response', value: '120ms' },
-    { label: 'Requests/min', value: '340' },
-    { label: 'Error Rate', value: '0.1%' },
-    { label: 'Active Sessions', value: '89' },
-  ]},
-  { title: 'Enrichment Pipeline', icon: HeartPulse, health: 'degraded' as const, metrics: [
-    { label: 'Queue Size', value: '42' },
-    { label: 'Processing Rate', value: '15/min' },
-    { label: 'Failed', value: '8' },
-    { label: 'Provider Health', value: 'Degraded' },
-  ]},
-  { title: 'Webhook System', icon: AlertTriangle, health: 'healthy' as const, metrics: [
-    { label: 'Unipile', value: 'OK' },
-    { label: 'Stripe', value: 'OK' },
-    { label: 'Failed Deliveries', value: '1' },
-    { label: 'Retry Queue', value: '0' },
-  ]},
-  { title: 'Security', icon: Shield, health: 'healthy' as const, metrics: [
-    { label: 'Failed Logins (24h)', value: '3' },
-    { label: 'Suspended Users', value: '1' },
-    { label: 'Active JWT Sessions', value: '142' },
-    { label: 'Last Audit', value: '2m ago' },
-  ]},
-]
-
 export default function AdminSystemHealthPage() {
+  const { data: healthData, refetch } = useApi<any>('/api/admin/health')
+  const h = healthData || {}
+  const db = h.database || {}
+  const api = h.api || {}
+  const mem = h.memory || {}
+
+  const uptimeHours = h.uptime ? (h.uptime / 3600).toFixed(1) : '0'
+  const heapMB = mem.heapUsed ? (mem.heapUsed / 1024 / 1024).toFixed(0) : '0'
+  const rsssMB = mem.rss ? (mem.rss / 1024 / 1024).toFixed(0) : '0'
+
+  // Auto-refresh every 30s
+  useEffect(() => {
+    const interval = setInterval(refetch, 30000)
+    return () => clearInterval(interval)
+  }, [refetch])
+
+  const healthCards = [
+    { title: 'Server', icon: Terminal, health: h.status || 'unknown', metrics: [
+      { label: 'Status', value: h.status || 'unknown' },
+      { label: 'Uptime', value: `${uptimeHours}h` },
+      { label: 'Heap Used', value: `${heapMB} MB` },
+      { label: 'RSS', value: `${rsssMB} MB` },
+    ]},
+    { title: 'Database', icon: Database, health: db.health || 'unknown', metrics: [
+      { label: 'Size', value: `${db.sizeMB || 0} MB` },
+      { label: 'Total Users', value: db.totalUsers || 0 },
+      { label: 'Total Leads', value: db.totalLeads || 0 },
+      { label: 'Total Campaigns', value: db.totalCampaigns || 0 },
+    ]},
+    { title: 'Campaign Engine', icon: Cpu, health: db.activeCampaigns > 0 ? 'healthy' : 'idle', metrics: [
+      { label: 'Active Campaigns', value: db.activeCampaigns || 0 },
+      { label: 'Total Campaigns', value: db.totalCampaigns || 0 },
+      { label: 'Today Actions', value: api.todayActions || 0 },
+      { label: 'Status', value: db.activeCampaigns > 0 ? 'Running' : 'Idle' },
+    ]},
+    { title: 'API', icon: HeartPulse, health: api.health || 'unknown', metrics: [
+      { label: 'Health', value: api.health || 'unknown' },
+      { label: 'Today Actions', value: api.todayActions || 0 },
+      { label: 'Last Check', value: h.timestamp ? new Date(h.timestamp).toLocaleTimeString() : 'N/A' },
+      { label: 'Active DB Users', value: db.totalUsers || 0 },
+    ]},
+  ]
+
   return (
     <div className="space-y-5">
       <PageHeader title="System Health" subtitle="Infrastructure and service monitoring">
-        <QuickActionButton icon={<RotateCcw className="w-4 h-4" />} label="Run Diagnostics" onClick={() => {}} variant="primary" />
+        <QuickActionButton icon={<RotateCcw className="w-4 h-4" />} label="Refresh" onClick={refetch} variant="primary" />
       </PageHeader>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-4">
         {healthCards.map((card, i) => (
           <motion.div
             key={card.title}
@@ -67,7 +72,7 @@ export default function AdminSystemHealthPage() {
                 </div>
                 <h3 className="text-sm font-semibold text-white">{card.title}</h3>
               </div>
-              <HealthBadge health={card.health} />
+              <HealthBadge health={card.health as any} />
             </div>
             <div className="px-5 py-4 grid grid-cols-2 gap-3">
               {card.metrics.map(m => (
