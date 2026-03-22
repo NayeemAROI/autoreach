@@ -466,22 +466,52 @@ async function syncInbox(wsId, userId) {
   const chats = data.items || [];
   logger.info(`[Unipile] Fetched ${chats.length} conversations`);
 
+  // Log first chat structure for debugging
+  if (chats.length > 0) {
+    logger.info(`[Unipile] Sample chat structure: ${JSON.stringify(chats[0]).substring(0, 800)}`);
+  }
+
   const { v4: uuidv4 } = require('uuid');
   let messageCount = 0;
   let newConversations = 0;
 
   for (const chat of chats.slice(0, 30)) {
     try {
-      // Determine participant info
-      const attendees = chat.attendees || [];
-      const otherPerson = attendees.find(a => a.provider_id !== accountId) || attendees[0] || {};
-      const participantName = otherPerson.display_name || otherPerson.name || chat.name || 'Unknown';
-      const participantUrl = otherPerson.provider_id ? `https://www.linkedin.com/in/${otherPerson.provider_id}` : '';
+      // Extract participant name — try many Unipile field variations
+      let participantName = 'Unknown';
+      let participantUrl = '';
+
+      // Method 1: From chat.attendees array
+      const attendees = chat.attendees || chat.participants || [];
+      if (attendees.length > 0) {
+        // Find the other person (not us)
+        const other = attendees.find(a => {
+          const id = a.provider_id || a.id || a.account_id || '';
+          return id !== accountId;
+        }) || attendees[0];
+        
+        participantName = other.display_name || other.name || other.full_name 
+          || (other.first_name ? `${other.first_name} ${other.last_name || ''}`.trim() : '')
+          || other.username || 'Unknown';
+        
+        const pid = other.provider_id || other.id || other.public_identifier || '';
+        if (pid && pid !== accountId) {
+          participantUrl = pid.startsWith('http') ? pid : `https://www.linkedin.com/in/${pid}`;
+        }
+      }
+
+      // Method 2: From chat-level fields
+      if (participantName === 'Unknown') {
+        participantName = chat.name || chat.title || chat.display_name || 'Unknown';
+      }
 
       // Find or create conversation
       let conv = null;
       if (participantUrl) {
         conv = db.prepare('SELECT id FROM conversations WHERE participantUrl = ? AND user_id = ?').get(participantUrl, userId);
+      }
+      if (!conv && participantName !== 'Unknown') {
+        conv = db.prepare('SELECT id FROM conversations WHERE participantName = ? AND user_id = ? AND workspace_id = ?').get(participantName, userId, wsId);
       }
 
       if (!conv) {
@@ -492,7 +522,7 @@ async function syncInbox(wsId, userId) {
           db.prepare(`
             INSERT INTO conversations (id, user_id, workspace_id, lead_id, participantName, participantUrl, lastMessage, lastMessageAt)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(convId, userId, wsId, lead?.id || null, participantName, participantUrl, '', new Date().toISOString());
+          `).run(convId, userId, wsId, lead?.id || null, participantName, participantUrl, '', '1970-01-01T00:00:00Z');
           conv = { id: convId };
           newConversations++;
         } catch (insertErr) {
@@ -505,6 +535,14 @@ async function syncInbox(wsId, userId) {
       const msgs = await unipileFetch(`/chats/${chat.id}/messages?limit=15`);
       const items = msgs.items || [];
 
+      // Log first message structure for debugging
+      if (items.length > 0 && messageCount === 0) {
+        logger.info(`[Unipile] Sample message structure: ${JSON.stringify(items[0]).substring(0, 500)}`);
+      }
+
+      let latestMessage = '';
+      let latestTimestamp = '1970-01-01T00:00:00Z';
+
       for (const msg of items) {
         const msgLinkedInId = msg.id || msg.provider_id || '';
         
@@ -514,9 +552,23 @@ async function syncInbox(wsId, userId) {
           if (existing) continue;
         }
 
-        const isOutbound = msg.is_sender || (msg.sender && msg.sender.provider_id === accountId);
+        // Determine direction
+        const senderInfo = msg.sender || {};
+        const senderId = senderInfo.provider_id || senderInfo.id || senderInfo.account_id || '';
+        const isOutbound = msg.is_sender || senderId === accountId;
         const direction = isOutbound ? 'outbound' : 'inbound';
-        const senderName = isOutbound ? 'You' : participantName;
+        
+        // Extract sender name from message (fallback to update participant name)
+        const msgSenderName = senderInfo.display_name || senderInfo.name 
+          || (senderInfo.first_name ? `${senderInfo.first_name} ${senderInfo.last_name || ''}`.trim() : '');
+        
+        if (!isOutbound && msgSenderName && participantName === 'Unknown') {
+          participantName = msgSenderName;
+          // Update the conversation's participant name
+          db.prepare('UPDATE conversations SET participantName = ? WHERE id = ?').run(participantName, conv.id);
+        }
+
+        const senderName = isOutbound ? 'You' : (msgSenderName || participantName);
         const content = msg.text || msg.body || msg.text_content || '';
         const timestamp = msg.timestamp || msg.date || msg.created_at || new Date().toISOString();
 
@@ -527,9 +579,11 @@ async function syncInbox(wsId, userId) {
           `).run(uuidv4(), conv.id, userId, direction, content, senderName, msgLinkedInId, timestamp);
           messageCount++;
 
-          // Update conversation with latest message
-          db.prepare("UPDATE conversations SET lastMessage = ?, lastMessageAt = ? WHERE id = ? AND (lastMessageAt IS NULL OR lastMessageAt < ?)")
-            .run(content.substring(0, 200), timestamp, conv.id, timestamp);
+          // Track latest message for conversation update
+          if (content && timestamp > latestTimestamp) {
+            latestMessage = content.substring(0, 200);
+            latestTimestamp = timestamp;
+          }
 
           if (direction === 'inbound') {
             db.prepare("UPDATE conversations SET unreadCount = unreadCount + 1 WHERE id = ?").run(conv.id);
@@ -537,6 +591,12 @@ async function syncInbox(wsId, userId) {
         } catch (msgErr) {
           // Skip duplicate messages silently
         }
+      }
+
+      // Update conversation with the latest message (unconditional)
+      if (latestMessage) {
+        db.prepare("UPDATE conversations SET lastMessage = ?, lastMessageAt = ? WHERE id = ?")
+          .run(latestMessage, latestTimestamp, conv.id);
       }
     } catch (chatErr) {
       logger.warn(`[Unipile] Failed to sync chat ${chat.id}: ${chatErr.message}`);
