@@ -11,6 +11,25 @@ function getWsId(userId) {
   return user?.activeWorkspaceId || '';
 }
 
+// Helper: check if an account ID is already connected to a different workspace
+function checkDuplicateAccount(accountId, currentWsId) {
+  try {
+    const rows = db.prepare(
+      "SELECT key, value FROM settings WHERE key LIKE 'unipile_account_id:%' AND value = ?"
+    ).all(accountId);
+    
+    for (const row of rows) {
+      const wsId = row.key.replace('unipile_account_id:', '');
+      if (wsId !== currentWsId) {
+        // Find workspace name
+        const ws = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(wsId);
+        return ws?.name || wsId;
+      }
+    }
+  } catch {}
+  return null;
+}
+
 // GET /api/integrations/status - Check LinkedIn connection status (workspace-scoped)
 router.get('/status', authenticate, async (req, res) => {
   try {
@@ -73,8 +92,16 @@ router.post('/connect-linkedin', authenticate, async (req, res) => {
       });
     }
 
-    // Save account ID for this workspace
+    // Check for duplicate: is this account already in another workspace?
     if (result.accountId) {
+      const dupWsName = checkDuplicateAccount(result.accountId, wsId);
+      if (dupWsName) {
+        // Clean up: delete the account from Unipile since we can't use it
+        try { await unipile.deleteAccount(result.accountId); } catch {}
+        return res.status(409).json({
+          error: `This LinkedIn account is already connected in workspace "${dupWsName}". Please disconnect it there first, then try again.`
+        });
+      }
       unipile.setAccountId(result.accountId, wsId);
     }
 
@@ -145,8 +172,15 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
     const unipile = require('../services/unipileApi');
     const result = await unipile.connectWithCookie(trimmed, proxyCountry || 'bd');
 
-    // Save account ID for this workspace
+    // Check for duplicate: is this account already in another workspace?
     if (result.accountId) {
+      const dupWsName = checkDuplicateAccount(result.accountId, wsId);
+      if (dupWsName) {
+        try { await unipile.deleteAccount(result.accountId); } catch {}
+        return res.status(409).json({
+          error: `This LinkedIn account is already connected in workspace "${dupWsName}". Please disconnect it there first, then try again.`
+        });
+      }
       unipile.setAccountId(result.accountId, wsId);
     }
 
