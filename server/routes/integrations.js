@@ -11,19 +11,33 @@ function getWsId(userId) {
   return user?.activeWorkspaceId || '';
 }
 
-// Helper: check if an account ID is already connected to a different workspace
-function checkDuplicateAccount(accountId, currentWsId) {
+// Helper: check if an account is already connected to a different workspace (by ID or profile name)
+function checkDuplicateAccount(accountId, profileName, currentWsId) {
   try {
-    const rows = db.prepare(
-      "SELECT key, value FROM settings WHERE key LIKE 'unipile_account_id:%' AND value = ?"
-    ).all(accountId);
-    
-    for (const row of rows) {
-      const wsId = row.key.replace('unipile_account_id:', '');
-      if (wsId !== currentWsId) {
-        // Find workspace name
-        const ws = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(wsId);
-        return ws?.name || wsId;
+    // Check by account ID
+    if (accountId) {
+      const rows = db.prepare(
+        "SELECT key, value FROM settings WHERE key LIKE 'unipile_account_id:%' AND value = ?"
+      ).all(accountId);
+      for (const row of rows) {
+        const wsId = row.key.replace('unipile_account_id:', '');
+        if (wsId !== currentWsId) {
+          const ws = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(wsId);
+          return ws?.name || wsId;
+        }
+      }
+    }
+    // Check by profile name
+    if (profileName) {
+      const rows = db.prepare(
+        "SELECT key, value FROM settings WHERE key LIKE 'unipile_profile_name:%' AND value = ?"
+      ).all(profileName);
+      for (const row of rows) {
+        const wsId = row.key.replace('unipile_profile_name:', '');
+        if (wsId !== currentWsId) {
+          const ws = db.prepare('SELECT name FROM workspaces WHERE id = ?').get(wsId);
+          return ws?.name || wsId;
+        }
       }
     }
   } catch {}
@@ -98,7 +112,7 @@ router.post('/connect-linkedin', authenticate, async (req, res) => {
 
     // Check for duplicate: is this account already in another workspace?
     if (result.accountId) {
-      const dupWsName = checkDuplicateAccount(result.accountId, wsId);
+      const dupWsName = checkDuplicateAccount(result.accountId, result.name, wsId);
       if (dupWsName) {
         // Clean up: delete the account from Unipile since we can't use it
         try { await unipile.deleteAccount(result.accountId); } catch {}
@@ -107,6 +121,8 @@ router.post('/connect-linkedin', authenticate, async (req, res) => {
         });
       }
       unipile.setAccountId(result.accountId, wsId);
+      // Store profile name for cross-workspace duplicate detection
+      try { db.prepare(`INSERT OR REPLACE INTO settings (key, user_id, value) VALUES (?, 'system', ?)`).run(`unipile_profile_name:${wsId}`, result.name || ''); } catch {}
     }
 
     logAction(req, 'integration.linkedin_connected', 'integration', '', result.name);
@@ -178,7 +194,7 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
 
     // Check for duplicate: is this account already in another workspace?
     if (result.accountId) {
-      const dupWsName = checkDuplicateAccount(result.accountId, wsId);
+      const dupWsName = checkDuplicateAccount(result.accountId, result.name, wsId);
       if (dupWsName) {
         try { await unipile.deleteAccount(result.accountId); } catch {}
         return res.status(409).json({
@@ -186,6 +202,8 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
         });
       }
       unipile.setAccountId(result.accountId, wsId);
+      // Store profile name for cross-workspace duplicate detection
+      try { db.prepare(`INSERT OR REPLACE INTO settings (key, user_id, value) VALUES (?, 'system', ?)`).run(`unipile_profile_name:${wsId}`, result.name || ''); } catch {}
     }
 
     logAction(req, 'integration.linkedin_connected', 'integration', '', result.name);
@@ -219,9 +237,10 @@ router.post('/disconnect', authenticate, async (req, res) => {
       }
     }
 
-    // Clear workspace-scoped account ID setting
+    // Clear workspace-scoped settings
     try {
       db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_account_id:${wsId}`);
+      db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_profile_name:${wsId}`);
     } catch {}
 
     // Clear conversations/messages for this workspace
