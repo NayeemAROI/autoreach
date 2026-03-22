@@ -79,7 +79,7 @@ export default function AdminUsersPage() {
 
             <div>
               <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Workspaces</h4>
-              {mockUserDetails.workspaces.map(ws => (
+              {(mockUserDetails?.workspaces || []).map(ws => (
                 <div key={ws.id} className="flex items-center justify-between py-2 border-b border-zinc-800/40 last:border-0">
                   <span className="text-sm text-zinc-300">{ws.name}</span>
                   <span className="text-[11px] text-zinc-500 capitalize">{ws.role}</span>

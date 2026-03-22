@@ -13,7 +13,7 @@ import { QuickActionButton } from '@/components/shared/AlertStrip'
 
 export default function OwnerTeamPage() {
   const [showInvite, setShowInvite] = useState(false)
-  const members = mockWorkspaceDetails.members
+  const members = mockWorkspaceDetails?.members || []
   const active = members.filter(m => m.status === 'active').length
   const invited = members.filter(m => m.status === 'invited').length
 

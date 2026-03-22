@@ -75,7 +75,7 @@ export default function OwnerLeadsPage() {
               { label: 'Status', value: (() => { const b = leadStatusBadge(selected.status); return <StatusBadge label={b.label} variant={b.variant} /> })() },
               { label: 'Added', value: formatRelativeTime(selected.createdAt) },
             ]} />
-            {mockLeadDetails.notes.length > 0 && (
+            {(mockLeadDetails?.notes?.length ?? 0) > 0 && (
               <div>
                 <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Notes</h4>
                 {mockLeadDetails.notes.map((n, i) => (

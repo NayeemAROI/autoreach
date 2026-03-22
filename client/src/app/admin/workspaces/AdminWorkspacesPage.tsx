@@ -86,7 +86,7 @@ export default function AdminWorkspacesPage() {
             )}
             {detailTab === 'members' && (
               <div className="space-y-2">
-                {mockWorkspaceDetails.members.map(m => (
+                {(mockWorkspaceDetails?.members || []).map(m => (
                   <div key={m.id} className="flex items-center justify-between py-2.5 border-b border-zinc-800/40 last:border-0">
                     <div className="flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-400 text-xs font-bold">{m.name[0]}</div>
@@ -99,10 +99,10 @@ export default function AdminWorkspacesPage() {
             )}
             {detailTab === 'billing' && (
               <InfoList items={[
-                { label: 'Subscription', value: <StatusBadge label={mockWorkspaceDetails.subscriptionStatus} variant="success" /> },
-                { label: 'Cycle', value: mockWorkspaceDetails.billingCycle || 'N/A' },
-                { label: 'Monthly Invites', value: mockWorkspaceDetails.monthlyInvites.toLocaleString() },
-                { label: 'Monthly Messages', value: mockWorkspaceDetails.monthlyMessages.toLocaleString() },
+                { label: 'Subscription', value: <StatusBadge label={mockWorkspaceDetails?.subscriptionStatus || 'N/A'} variant="success" /> },
+                { label: 'Cycle', value: mockWorkspaceDetails?.billingCycle || 'N/A' },
+                { label: 'Monthly Invites', value: (mockWorkspaceDetails?.monthlyInvites ?? 0).toLocaleString() },
+                { label: 'Monthly Messages', value: (mockWorkspaceDetails?.monthlyMessages ?? 0).toLocaleString() },
               ]} />
             )}
           </div>
