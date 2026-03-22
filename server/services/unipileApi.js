@@ -93,6 +93,42 @@ async function unipileFetch(endpoint, options = {}) {
 }
 
 /**
+ * List all connected accounts on Unipile
+ */
+async function listAccounts() {
+  return await unipileFetch('/accounts');
+}
+
+/**
+ * Check if a workspace has a configured Unipile account
+ */
+async function isConfigured(wsId) {
+  const accountId = getAccountId(wsId);
+  return !!accountId;
+}
+
+/**
+ * Health check — verify the account is running on Unipile
+ */
+async function healthCheck(wsId) {
+  const accountId = getAccountId(wsId);
+  if (!accountId) return { ok: false };
+  
+  try {
+    const account = await unipileFetch(`/accounts/${encodeURIComponent(accountId)}`);
+    return {
+      ok: true,
+      accountId: accountId,
+      name: account.name || 'LinkedIn Profile',
+      status: account.status || 'unknown',
+    };
+  } catch (err) {
+    logger.warn(`[Unipile] Health check failed for ${accountId}: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
  * Get user profile by LinkedIn public identifier (e.g., "john-doe")
  */
 async function getUserProfile(publicIdentifier, wsId) {
