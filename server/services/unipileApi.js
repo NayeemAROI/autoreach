@@ -27,13 +27,24 @@ function getApiKey() {
 }
 
 function getAccountId(wsId) {
-  // Workspace-scoped only — no global fallback
-  if (wsId) {
-    try {
-      const setting = db.prepare("SELECT value FROM settings WHERE key = ?").get(`unipile_account_id:${wsId}`);
-      if (setting?.value) return setting.value;
-    } catch {}
-  }
+  // Always use consistent key format: unipile_account_id:{wsId}
+  const key = `unipile_account_id:${wsId || 'global'}`;
+  try {
+    const setting = db.prepare("SELECT value FROM settings WHERE key = ?").get(key);
+    if (setting?.value) {
+      logger.info(`[Unipile] getAccountId found: ${setting.value} (key: ${key})`);
+      return setting.value;
+    }
+  } catch {}
+  // Also check legacy global key
+  try {
+    const setting = db.prepare("SELECT value FROM settings WHERE key = 'unipile_account_id'").get();
+    if (setting?.value) {
+      logger.info(`[Unipile] getAccountId found via legacy global: ${setting.value}`);
+      return setting.value;
+    }
+  } catch {}
+  logger.info(`[Unipile] getAccountId: no account found (key: ${key})`);
   return '';
 }
 
@@ -489,9 +500,10 @@ async function solveCheckpoint(accountId, code) {
  */
 function setAccountId(accountId, wsId) {
   try {
-    const key = wsId ? `unipile_account_id:${wsId}` : 'unipile_account_id';
+    // Always use consistent key format matching getAccountId
+    const key = `unipile_account_id:${wsId || 'global'}`;
     db.prepare(`INSERT OR REPLACE INTO settings (key, user_id, value) VALUES (?, 'system', ?)`).run(key, accountId);
-    logger.info(`[Unipile] Account ID saved: ${accountId} (workspace: ${wsId || 'global'})`);
+    logger.info(`[Unipile] Account ID saved: ${accountId} (key: ${key})`);
   } catch (err) {
     logger.warn(`[Unipile] DB save failed: ${err.message}`);
   }
@@ -524,7 +536,7 @@ async function deleteAccount(accountId, wsId) {
 
   // Clear stored account ID
   try {
-    const key = wsId ? `unipile_account_id:${wsId}` : 'unipile_account_id';
+    const key = `unipile_account_id:${wsId || 'global'}`;
     db.prepare(`DELETE FROM settings WHERE key = ?`).run(key);
     if (!wsId) delete process.env.UNIPILE_ACCOUNT_ID;
   } catch {}

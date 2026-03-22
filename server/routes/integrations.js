@@ -237,10 +237,13 @@ router.post('/disconnect', authenticate, async (req, res) => {
       }
     }
 
-    // Clear workspace-scoped settings
+    // Clear workspace-scoped settings (use consistent key format)
+    const keyId = wsId || 'global';
     try {
-      db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_account_id:${wsId}`);
-      db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_profile_name:${wsId}`);
+      db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_account_id:${keyId}`);
+      db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_profile_name:${keyId}`);
+      // Also clean legacy global key
+      db.prepare(`DELETE FROM settings WHERE key = 'unipile_account_id'`).run();
     } catch {}
 
     // Clear conversations/messages for this workspace
