@@ -268,9 +268,20 @@ async function connectLinkedIn(username, password) {
     }),
   });
 
-  const data = await res.json();
+  let data;
+  const rawText = await res.text();
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    logger.error(`[Unipile] Non-JSON response (${res.status}): ${rawText.substring(0, 300)}`);
+    throw new Error(`Unipile returned invalid response (${res.status})`);
+  }
+  
+  // Log full response for debugging
+  logger.info(`[Unipile] LinkedIn connect response (${res.status}): ${JSON.stringify(data).substring(0, 500)}`);
   
   // Check if checkpoint required (2FA, CAPTCHA, etc.)
+  // Unipile may return 202, 200 with checkpoint object, or even 401 for verification
   if (res.status === 202 || data.checkpoint || data.object === 'Checkpoint') {
     logger.info(`[Unipile] LinkedIn login requires checkpoint: ${data.checkpoint?.type || data.type || 'unknown'}`);
     return {
@@ -281,8 +292,26 @@ async function connectLinkedIn(username, password) {
     };
   }
 
+  // Handle 401 — could be wrong password OR LinkedIn security challenge
+  if (res.status === 401) {
+    const detail = data.detail || data.error || data.message || '';
+    // Check if Unipile hints at a checkpoint/verification in the error
+    if (detail.toLowerCase().includes('checkpoint') || detail.toLowerCase().includes('challenge') || detail.toLowerCase().includes('verify')) {
+      return {
+        checkpoint: true,
+        accountId: data.account_id || data.id || '',
+        type: 'verification',
+        message: 'LinkedIn requires verification. Please log in at linkedin.com first, complete any security checks, then try again.',
+      };
+    }
+    throw new Error(
+      'LinkedIn login rejected (401). This usually means LinkedIn is blocking the login from an unfamiliar location. ' +
+      'Try: 1) Log into linkedin.com manually first 2) Complete any security challenges 3) Then retry here, or use the li_at cookie method instead.'
+    );
+  }
+
   if (!res.ok) {
-    const errMsg = data.error || data.message || `Login failed (${res.status})`;
+    const errMsg = data.error || data.message || data.detail || `Login failed (${res.status})`;
     throw new Error(errMsg);
   }
 
