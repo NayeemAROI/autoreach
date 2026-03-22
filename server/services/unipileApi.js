@@ -27,19 +27,13 @@ function getApiKey() {
 }
 
 function getAccountId(wsId) {
-  // Check database first — workspace-scoped
+  // Workspace-scoped only — no global fallback
   if (wsId) {
     try {
       const setting = db.prepare("SELECT value FROM settings WHERE key = ?").get(`unipile_account_id:${wsId}`);
       if (setting?.value) return setting.value;
     } catch {}
   }
-  // Fallback: global key (legacy)
-  try {
-    const setting = db.prepare("SELECT value FROM settings WHERE key = 'unipile_account_id'").get();
-    if (setting?.value) return setting.value;
-  } catch {}
-  
   return '';
 }
 
@@ -50,12 +44,11 @@ async function getAccountIdDynamic(wsId) {
   const stored = getAccountId(wsId);
   if (stored) return stored;
   
-  // Auto-discover from Unipile if no stored account ID
+  // Auto-discover from Unipile — but DON'T auto-save (workspace must explicitly connect)
   try {
     const accounts = await unipileFetch('/accounts');
     const linkedin = (accounts.items || []).find(a => a.type === 'LINKEDIN');
     if (linkedin?.id) {
-      setAccountId(linkedin.id, wsId); // Save for this workspace too
       return linkedin.id;
     }
   } catch {}

@@ -180,39 +180,27 @@ router.post('/connect-cookie', authenticate, async (req, res) => {
   }
 });
 
-// POST /api/integrations/disconnect - Disconnect LinkedIn for this workspace
+// POST /api/integrations/disconnect - Disconnect LinkedIn for this workspace only
 router.post('/disconnect', authenticate, async (req, res) => {
   try {
     const wsId = getWsId(req.user.id);
-    const unipile = require('../services/unipileApi');
-    let accountId = unipile.getAccountId(wsId);
+    console.log(`[Integrations] Disconnecting LinkedIn for workspace ${wsId} (workspace-scoped only)`);
     
-    // If no local account ID, try to discover from Unipile
-    if (!accountId) {
-      try {
-        const accounts = await unipile.listAccounts();
-        const linkedin = (accounts.items || []).find(a => a.type === 'LINKEDIN');
-        if (linkedin) accountId = linkedin.id;
-      } catch {}
-    }
-    
-    if (accountId) {
-      try {
-        await unipile.deleteAccount(accountId, wsId);
-        console.log(`[Integrations] Deleted Unipile account ${accountId}`);
-      } catch (err) {
-        console.warn('[Integrations] Unipile disconnect warning:', err.message);
-      }
-    }
-
-    // Clear all stored account IDs (workspace-scoped + global)
+    // Only clear this workspace's stored account ID — do NOT delete from Unipile
+    // Other workspaces may share the same Unipile account
     try {
       db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_account_id:${wsId}`);
-      db.prepare(`DELETE FROM settings WHERE key = 'unipile_account_id'`).run();
     } catch {}
 
+    // Clear conversations/messages for this workspace
+    const convIds = db.prepare('SELECT id FROM conversations WHERE user_id = ? AND workspace_id = ?').all(req.user.id, wsId);
+    for (const c of convIds) {
+      db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(c.id);
+    }
+    db.prepare('DELETE FROM conversations WHERE user_id = ? AND workspace_id = ?').run(req.user.id, wsId);
+
     logAction(req, 'integration.linkedin_disconnected', 'integration');
-    res.json({ success: true, message: 'LinkedIn disconnected.' });
+    res.json({ success: true, message: 'LinkedIn disconnected from this workspace.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

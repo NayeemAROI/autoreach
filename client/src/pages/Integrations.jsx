@@ -157,6 +157,45 @@ export default function Integrations() {
   const [countdown, setCountdown] = useState(0)
   const countdownRef = useRef(null)
 
+  // Auto-sync countdown after connection
+  const [autoSyncCountdown, setAutoSyncCountdown] = useState(0)
+  const autoSyncRef = useRef(null)
+
+  const startAutoSync = () => {
+    // Clear any existing auto-sync timer
+    if (autoSyncRef.current) clearInterval(autoSyncRef.current)
+    setAutoSyncCountdown(60)
+    autoSyncRef.current = setInterval(() => {
+      setAutoSyncCountdown(prev => {
+        if (prev <= 1) {
+          clearInterval(autoSyncRef.current)
+          // Trigger sync
+          handleSyncAuto()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  const handleSyncAuto = async () => {
+    setSyncing(true)
+    setMessage({ type: 'info', text: 'Auto-syncing inbox...' })
+    try {
+      const res = await apiFetch('/api/integrations/sync-inbox', { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) {
+        setMessage({ type: 'success', text: data.message })
+      } else {
+        setMessage({ type: 'error', text: data.error || 'Auto-sync failed. Try syncing manually.' })
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Network error during auto-sync.' })
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   const fetchStatus = async () => {
     try {
       const res = await apiFetch('/api/integrations/status')
@@ -290,6 +329,7 @@ export default function Integrations() {
         setEmail('')
         setPassword('')
         fetchStatus()
+        startAutoSync()
       } else {
         // Login failed — auto-show cookie input as fallback
         setConnectionPhase('idle')
@@ -358,6 +398,7 @@ export default function Integrations() {
         setMessage({ type: 'success', text: data.message })
         setCookieInput('')
         fetchStatus()
+        startAutoSync()
       } else {
         setMessage({ type: 'error', text: data.error || 'Connection failed.' })
       }
@@ -424,6 +465,16 @@ export default function Integrations() {
            : message.type === 'info' ? <Shield className="w-5 h-5 shrink-0 mt-0.5" />
            : <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />}
           <span className="text-sm">{message.text}</span>
+        </div>
+      )}
+
+      {/* Auto-sync countdown */}
+      {autoSyncCountdown > 0 && (
+        <div className="flex items-center gap-3 p-4 rounded-lg border bg-primary/5 border-primary/30 text-primary">
+          <Loader2 className="w-5 h-5 shrink-0 animate-spin" />
+          <span className="text-sm">
+            Inbox will auto-sync in <strong>{autoSyncCountdown}s</strong> — Unipile is indexing your conversations...
+          </span>
         </div>
       )}
 
