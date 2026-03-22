@@ -185,19 +185,30 @@ router.post('/disconnect', authenticate, async (req, res) => {
   try {
     const wsId = getWsId(req.user.id);
     const unipile = require('../services/unipileApi');
-    const accountId = unipile.getAccountId(wsId);
+    let accountId = unipile.getAccountId(wsId);
+    
+    // If no local account ID, try to discover from Unipile
+    if (!accountId) {
+      try {
+        const accounts = await unipile.listAccounts();
+        const linkedin = (accounts.items || []).find(a => a.type === 'LINKEDIN');
+        if (linkedin) accountId = linkedin.id;
+      } catch {}
+    }
     
     if (accountId) {
       try {
         await unipile.deleteAccount(accountId, wsId);
+        console.log(`[Integrations] Deleted Unipile account ${accountId}`);
       } catch (err) {
         console.warn('[Integrations] Unipile disconnect warning:', err.message);
       }
     }
 
-    // Clear workspace-scoped account ID
+    // Clear all stored account IDs (workspace-scoped + global)
     try {
       db.prepare(`DELETE FROM settings WHERE key = ?`).run(`unipile_account_id:${wsId}`);
+      db.prepare(`DELETE FROM settings WHERE key = 'unipile_account_id'`).run();
     } catch {}
 
     logAction(req, 'integration.linkedin_disconnected', 'integration');
@@ -210,9 +221,10 @@ router.post('/disconnect', authenticate, async (req, res) => {
 // POST /api/integrations/sync-inbox - Trigger server-side inbox sync via Unipile
 router.post('/sync-inbox', authenticate, async (req, res) => {
   try {
-    console.log(`[Integrations] Starting inbox sync for user ${req.user.id}...`);
+    const wsId = getWsId(req.user.id);
+    console.log(`[Integrations] Starting inbox sync for user ${req.user.id}, workspace ${wsId}...`);
     const unipile = require('../services/unipileApi');
-    const result = await unipile.syncInbox();
+    const result = await unipile.syncInbox(wsId, req.user.id);
     logAction(req, 'integration.inbox_synced', 'integration', '', '', { messages: result.messages, conversations: result.conversations });
     res.json({
       success: true,

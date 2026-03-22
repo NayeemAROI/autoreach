@@ -459,25 +459,94 @@ async function deleteAccount(accountId, wsId) {
 /**
  * Sync inbox — fetch recent messages via Unipile
  */
-async function syncInbox(wsId) {
+async function syncInbox(wsId, userId) {
   const accountId = await getAccountIdDynamic(wsId);
   if (!accountId) throw new Error('No LinkedIn account connected');
 
-  logger.info(`[Unipile] Starting inbox sync...`);
+  logger.info(`[Unipile] Starting inbox sync for user ${userId}, workspace ${wsId}...`);
   const data = await unipileFetch(`/chats?account_id=${accountId}&limit=50`);
   const chats = data.items || [];
   logger.info(`[Unipile] Fetched ${chats.length} conversations`);
 
+  const { v4: uuidv4 } = require('uuid');
   let messageCount = 0;
-  for (const chat of chats.slice(0, 20)) {
+  let newConversations = 0;
+
+  for (const chat of chats.slice(0, 30)) {
     try {
-      const msgs = await unipileFetch(`/chats/${chat.id}/messages?limit=10`);
-      messageCount += (msgs.items || []).length;
-    } catch {}
+      // Determine participant info
+      const attendees = chat.attendees || [];
+      const otherPerson = attendees.find(a => a.provider_id !== accountId) || attendees[0] || {};
+      const participantName = otherPerson.display_name || otherPerson.name || chat.name || 'Unknown';
+      const participantUrl = otherPerson.provider_id ? `https://www.linkedin.com/in/${otherPerson.provider_id}` : '';
+
+      // Find or create conversation
+      let conv = null;
+      if (participantUrl) {
+        conv = db.prepare('SELECT id FROM conversations WHERE participantUrl = ? AND user_id = ?').get(participantUrl, userId);
+      }
+
+      if (!conv) {
+        const convId = uuidv4();
+        const lead = participantUrl ? db.prepare('SELECT id FROM leads WHERE linkedinUrl = ? AND user_id = ?').get(participantUrl, userId) : null;
+        
+        try {
+          db.prepare(`
+            INSERT INTO conversations (id, user_id, workspace_id, lead_id, participantName, participantUrl, lastMessage, lastMessageAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(convId, userId, wsId, lead?.id || null, participantName, participantUrl, '', new Date().toISOString());
+          conv = { id: convId };
+          newConversations++;
+        } catch (insertErr) {
+          logger.warn(`[Unipile] Failed to create conversation: ${insertErr.message}`);
+          continue;
+        }
+      }
+
+      // Fetch messages for this chat
+      const msgs = await unipileFetch(`/chats/${chat.id}/messages?limit=15`);
+      const items = msgs.items || [];
+
+      for (const msg of items) {
+        const msgLinkedInId = msg.id || msg.provider_id || '';
+        
+        // Skip if already synced
+        if (msgLinkedInId) {
+          const existing = db.prepare('SELECT id FROM messages WHERE linkedinMessageId = ?').get(msgLinkedInId);
+          if (existing) continue;
+        }
+
+        const isOutbound = msg.is_sender || (msg.sender && msg.sender.provider_id === accountId);
+        const direction = isOutbound ? 'outbound' : 'inbound';
+        const senderName = isOutbound ? 'You' : participantName;
+        const content = msg.text || msg.body || msg.text_content || '';
+        const timestamp = msg.timestamp || msg.date || msg.created_at || new Date().toISOString();
+
+        try {
+          db.prepare(`
+            INSERT INTO messages (id, conversation_id, user_id, direction, content, senderName, linkedinMessageId, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(uuidv4(), conv.id, userId, direction, content, senderName, msgLinkedInId, timestamp);
+          messageCount++;
+
+          // Update conversation with latest message
+          db.prepare("UPDATE conversations SET lastMessage = ?, lastMessageAt = ? WHERE id = ? AND (lastMessageAt IS NULL OR lastMessageAt < ?)")
+            .run(content.substring(0, 200), timestamp, conv.id, timestamp);
+
+          if (direction === 'inbound') {
+            db.prepare("UPDATE conversations SET unreadCount = unreadCount + 1 WHERE id = ?").run(conv.id);
+          }
+        } catch (msgErr) {
+          // Skip duplicate messages silently
+        }
+      }
+    } catch (chatErr) {
+      logger.warn(`[Unipile] Failed to sync chat ${chat.id}: ${chatErr.message}`);
+    }
   }
 
-  logger.info(`[Unipile] ✅ Synced ${messageCount} messages from ${chats.length} chats`);
-  return { success: true, conversations: chats.length, messages: messageCount };
+  logger.info(`[Unipile] ✅ Synced ${messageCount} messages from ${chats.length} chats (${newConversations} new)`);
+  return { success: true, conversations: chats.length, messages: messageCount, newConversations };
 }
 
 /**
