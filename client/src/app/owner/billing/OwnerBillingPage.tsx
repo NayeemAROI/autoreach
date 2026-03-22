@@ -1,101 +1,74 @@
 import { PageHeader, SectionHeader } from '@/components/shared/PageHeader'
-import { UsageProgressCard } from '@/components/shared/UsageProgressCard'
-import { InfoList } from '@/components/shared/ActivityTimeline'
+import { MetricGrid } from '@/components/shared/StatCard'
 import { StatusBadge } from '@/components/shared/StatusBadge'
-import { DataTable } from '@/components/tables/DataTable'
-import { mockBillingHistory } from '@/data/mock'
-import { PLAN_TIERS } from '@/lib/constants'
-import { formatDate, formatCurrency, planBadge } from '@/lib/utils'
-import type { BillingHistoryItem } from '@/types'
-import { CreditCard, ExternalLink, ArrowUpRight } from 'lucide-react'
+import { useApi } from '@/hooks/useApi'
+import { formatCurrency } from '@/lib/utils'
+import type { DashboardKPI } from '@/types'
+import { CreditCard, ArrowUpCircle } from 'lucide-react'
 import { QuickActionButton } from '@/components/shared/AlertStrip'
 
-const currentPlan = PLAN_TIERS.business
+const PLAN_TIERS = [
+  { id: 'free', name: 'Free', price: 0, leads: 100, campaigns: 2 },
+  { id: 'pro', name: 'Pro', price: 49, leads: 5000, campaigns: 20 },
+  { id: 'business', name: 'Business', price: 149, leads: 25000, campaigns: 100 },
+]
 
 export default function OwnerBillingPage() {
+  const { data: billingData } = useApi<any>('/api/billing/status')
+  const b = billingData || {}
+  const currentPlan = b.plan || 'free'
+  const tier = PLAN_TIERS.find(t => t.id === currentPlan) || PLAN_TIERS[0]
+
+  const kpis: DashboardKPI[] = [
+    { label: 'Current Plan', value: tier.name, icon: 'CreditCard' },
+    { label: 'Monthly Cost', value: formatCurrency(tier.price), icon: 'DollarSign' },
+    { label: 'Lead Limit', value: tier.leads.toLocaleString(), icon: 'Users' },
+    { label: 'Campaign Limit', value: tier.campaigns, icon: 'Rocket' },
+  ]
+
   return (
     <div className="space-y-5">
-      <PageHeader title="Billing" subtitle="Subscription and usage management">
-        <QuickActionButton icon={<ArrowUpRight className="w-4 h-4" />} label="Upgrade Plan" onClick={() => {}} variant="primary" />
+      <PageHeader title="Billing" subtitle="Manage your subscription and usage">
+        {currentPlan !== 'business' && (
+          <QuickActionButton icon={<ArrowUpCircle className="w-4 h-4" />} label="Upgrade Plan" onClick={() => window.location.href = '/billing'} variant="primary" />
+        )}
       </PageHeader>
 
-      {/* Current Plan */}
-      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
-              <CreditCard className="w-5 h-5 text-violet-400" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-semibold text-white">{currentPlan.label} Plan</h3>
-                <StatusBadge label="Active" variant="success" />
-              </div>
-              <p className="text-xs text-zinc-500">{formatCurrency(currentPlan.price)}/month · Renews Apr 15, 2026</p>
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <QuickActionButton icon={<ExternalLink className="w-3.5 h-3.5" />} label="Manage" onClick={() => {}} />
-          </div>
-        </div>
-      </div>
-
-      {/* Usage */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <UsageProgressCard label="Leads" used={2480} limit={currentPlan.leads} />
-        <UsageProgressCard label="Team Members" used={5} limit={currentPlan.members} />
-        <UsageProgressCard label="Connected Accounts" used={1} limit={currentPlan.connectedAccounts} />
-      </div>
-
-      {/* Billing History */}
-      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden">
-        <div className="px-5 py-4 border-b border-zinc-800/40">
-          <SectionHeader title="Billing History" />
-        </div>
-        <DataTable
-          columns={[
-            { key: 'date', header: 'Date', render: (i: BillingHistoryItem) => <span className="text-sm text-zinc-300">{formatDate(i.date)}</span> },
-            { key: 'desc', header: 'Description', render: (i: BillingHistoryItem) => <span className="text-sm text-zinc-300">{i.description}</span> },
-            { key: 'amount', header: 'Amount', render: (i: BillingHistoryItem) => <span className="text-sm font-semibold text-zinc-200">{formatCurrency(i.amount)}</span> },
-            { key: 'status', header: 'Status', render: (i: BillingHistoryItem) => <StatusBadge label={i.status} variant={i.status === 'paid' ? 'success' : i.status === 'failed' ? 'danger' : i.status === 'refunded' ? 'warning' : 'info'} /> },
-          ]}
-          data={mockBillingHistory}
-          keyExtractor={(i) => i.id}
-        />
-      </div>
+      <MetricGrid metrics={kpis} columns={4} accentColor="text-emerald-400" />
 
       {/* Plan Comparison */}
       <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden">
         <div className="px-5 py-4 border-b border-zinc-800/40">
-          <SectionHeader title="Plan Comparison" />
+          <SectionHeader title="Available Plans" />
         </div>
-        <table className="w-full">
-          <thead>
-            <tr className="border-b border-zinc-800/40">
-              <th className="text-left px-5 py-3 text-[11px] uppercase text-zinc-500 font-semibold">Feature</th>
-              {Object.values(PLAN_TIERS).map(p => (
-                <th key={p.label} className="text-center px-5 py-3 text-[11px] uppercase text-zinc-500 font-semibold">{p.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {[
-              { label: 'Price', key: 'price', fmt: (v: number) => v === 0 ? 'Free' : `$${v}/mo` },
-              { label: 'Leads', key: 'leads', fmt: (v: number) => v.toLocaleString() },
-              { label: 'Members', key: 'members', fmt: (v: number) => v.toString() },
-              { label: 'Campaigns', key: 'campaigns', fmt: (v: number) => v.toString() },
-              { label: 'Daily Invites', key: 'dailyInvites', fmt: (v: number) => v.toString() },
-            ].map(row => (
-              <tr key={row.key} className="border-b border-zinc-800/30">
-                <td className="px-5 py-3 text-sm text-zinc-300">{row.label}</td>
-                {Object.values(PLAN_TIERS).map(p => (
-                  <td key={p.label} className="text-center px-5 py-3 text-sm text-zinc-400">{row.fmt((p as any)[row.key])}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="grid grid-cols-1 md:grid-cols-3 divide-x divide-zinc-800/40">
+          {PLAN_TIERS.map(plan => (
+            <div key={plan.id} className={`p-5 ${plan.id === currentPlan ? 'bg-violet-500/5 border-l-2 border-l-violet-500' : ''}`}>
+              <div className="flex items-center gap-2 mb-3">
+                <h3 className="text-lg font-bold text-white">{plan.name}</h3>
+                {plan.id === currentPlan && <StatusBadge label="Current" variant="success" />}
+              </div>
+              <p className="text-2xl font-bold text-white mb-4">{plan.price === 0 ? 'Free' : `$${plan.price}/mo`}</p>
+              <div className="space-y-2 text-sm text-zinc-400">
+                <p>✓ {plan.leads.toLocaleString()} leads</p>
+                <p>✓ {plan.campaigns} campaigns</p>
+                <p>✓ {plan.id === 'free' ? 'Basic' : plan.id === 'pro' ? 'Priority' : 'Dedicated'} support</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
+
+      {/* Subscription Details */}
+      {b.subscription && (
+        <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 p-5">
+          <SectionHeader title="Subscription Details" />
+          <div className="mt-3 space-y-2 text-sm">
+            <div className="flex justify-between"><span className="text-zinc-500">Status</span><StatusBadge label={b.subscription.status} variant={b.subscription.status === 'active' ? 'success' : 'warning'} /></div>
+            <div className="flex justify-between"><span className="text-zinc-500">Period End</span><span className="text-zinc-300">{b.subscription.currentPeriodEnd || 'N/A'}</span></div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -4,22 +4,24 @@ import { TableToolbar } from '@/components/shared/SearchInput'
 import { DataTable, TablePagination, DetailsDrawer } from '@/components/tables/DataTable'
 import { StatusBadge } from '@/components/shared/StatusBadge'
 import { InfoList } from '@/components/shared/ActivityTimeline'
-import { mockAuditLogs } from '@/data/mock'
-import { formatDateTime, auditSeverityBadge, filterBySearch, paginateItems } from '@/lib/utils'
-import type { AuditEvent } from '@/types'
+import { useApi } from '@/hooks/useApi'
+import { formatDateTime, filterBySearch, paginateItems } from '@/lib/utils'
 
 export default function AdminAuditLogsPage() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
-  const [selected, setSelected] = useState<AuditEvent | null>(null)
+  const [selected, setSelected] = useState<any>(null)
   const pageSize = 10
 
-  const filtered = filterBySearch(mockAuditLogs, search, ['actor', 'action', 'target'])
+  const { data: auditData } = useApi<any>('/api/admin/audit-log?limit=200')
+  const logs = auditData?.logs || []
+
+  const filtered = filterBySearch(logs, search, ['actor', 'action', 'target', 'userId'])
   const paginated = paginateItems(filtered, page, pageSize)
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Audit Logs" subtitle={`${mockAuditLogs.length} events recorded`} />
+      <PageHeader title="Audit Logs" subtitle={`${logs.length} events recorded`} />
 
       <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden">
         <div className="p-5">
@@ -27,20 +29,19 @@ export default function AdminAuditLogsPage() {
         </div>
         <DataTable
           columns={[
-            { key: 'time', header: 'Time', render: (e: AuditEvent) => <span className="text-xs text-zinc-500 whitespace-nowrap">{formatDateTime(e.timestamp)}</span> },
-            { key: 'actor', header: 'Actor', render: (e: AuditEvent) => (
-              <div><div className="text-sm text-zinc-300">{e.actor}</div><div className="text-[10px] text-zinc-600">{e.actorEmail}</div></div>
+            { key: 'time', header: 'Time', render: (e: any) => <span className="text-xs text-zinc-500 whitespace-nowrap">{formatDateTime(e.timestamp || e.createdAt)}</span> },
+            { key: 'actor', header: 'Actor', render: (e: any) => (
+              <div><div className="text-sm text-zinc-300">{e.actor || e.userId || 'System'}</div><div className="text-[10px] text-zinc-600">{e.actorEmail || ''}</div></div>
             )},
-            { key: 'action', header: 'Action', render: (e: AuditEvent) => (
+            { key: 'action', header: 'Action', render: (e: any) => (
               <span className="text-sm text-zinc-300 font-mono text-xs bg-zinc-800/50 px-2 py-0.5 rounded">{e.action}</span>
             )},
-            { key: 'target', header: 'Target', render: (e: AuditEvent) => <span className="text-sm text-zinc-400">{e.target || '—'}</span> },
-            { key: 'workspace', header: 'Workspace', render: (e: AuditEvent) => <span className="text-xs text-zinc-500">{e.workspaceName || 'Global'}</span> },
-            { key: 'severity', header: 'Severity', render: (e: AuditEvent) => { const b = auditSeverityBadge(e.severity); return <StatusBadge label={b.label} variant={b.variant} /> } },
+            { key: 'target', header: 'Target', render: (e: any) => <span className="text-sm text-zinc-400">{e.target || '—'}</span> },
+            { key: 'category', header: 'Category', render: (e: any) => <span className="text-xs text-zinc-500">{e.category || 'general'}</span> },
           ]}
           data={paginated.data}
-          keyExtractor={(e) => e.id}
-          onRowClick={(e) => setSelected(e)}
+          keyExtractor={(e: any) => e.id}
+          onRowClick={(e: any) => setSelected(e)}
         />
         <TablePagination page={page} totalPages={paginated.totalPages} total={paginated.total} pageSize={pageSize} onPageChange={setPage} />
       </div>
@@ -49,18 +50,17 @@ export default function AdminAuditLogsPage() {
         {selected && (
           <div className="space-y-5">
             <InfoList items={[
-              { label: 'Timestamp', value: formatDateTime(selected.timestamp) },
-              { label: 'Actor', value: `${selected.actor} (${selected.actorEmail})` },
+              { label: 'Timestamp', value: formatDateTime(selected.timestamp || selected.createdAt) },
+              { label: 'Actor', value: selected.actor || selected.userId || 'System' },
               { label: 'Action', value: <span className="font-mono text-xs">{selected.action}</span> },
               { label: 'Target', value: selected.target || 'N/A' },
-              { label: 'Workspace', value: selected.workspaceName || 'Global' },
+              { label: 'Category', value: selected.category || 'general' },
               { label: 'IP Address', value: selected.ip || 'N/A' },
-              { label: 'Severity', value: (() => { const b = auditSeverityBadge(selected.severity); return <StatusBadge label={b.label} variant={b.variant} /> })() },
             ]} />
-            {selected.details && (
+            {selected.metadata && (
               <div>
                 <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">Details</h4>
-                <pre className="text-xs text-zinc-400 bg-zinc-800/50 p-3 rounded-xl overflow-x-auto">{JSON.stringify(selected.details, null, 2)}</pre>
+                <pre className="text-xs text-zinc-400 bg-zinc-800/50 p-3 rounded-xl overflow-x-auto">{JSON.stringify(typeof selected.metadata === 'string' ? JSON.parse(selected.metadata) : selected.metadata, null, 2)}</pre>
               </div>
             )}
           </div>

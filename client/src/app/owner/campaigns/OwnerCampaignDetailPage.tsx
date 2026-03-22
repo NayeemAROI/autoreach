@@ -1,159 +1,124 @@
 import { useState } from 'react'
+import { useParams } from 'react-router-dom'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { PageTabs } from '@/components/shared/PageTabs'
 import { MetricGrid } from '@/components/shared/StatCard'
 import { StatusBadge, HealthBadge } from '@/components/shared/StatusBadge'
 import { DataTable, TablePagination } from '@/components/tables/DataTable'
-import { InfoList } from '@/components/shared/ActivityTimeline'
-import { ActivityTimeline } from '@/components/shared/ActivityTimeline'
 import { EmptyState } from '@/components/shared/Feedback'
-import { mockCampaignDetail, mockCampaignLeads } from '@/data/mock'
+import { useApi } from '@/hooks/useApi'
 import { formatRelativeTime, campaignStatusBadge, paginateItems } from '@/lib/utils'
-import type { DashboardKPI, CampaignLeadRow, SequenceStep } from '@/types'
-import { Pause, Play, Copy, Trash2, ArrowLeft, Rocket } from 'lucide-react'
+import type { DashboardKPI } from '@/types'
+import { Pause, Play, RotateCcw, ArrowLeft, Rocket } from 'lucide-react'
 import { QuickActionButton } from '@/components/shared/AlertStrip'
 import { useNavigate } from 'react-router-dom'
 
 export default function OwnerCampaignDetailPage() {
-  const [tab, setTab] = useState('overview')
-  const [page, setPage] = useState(0)
+  const { id } = useParams()
   const navigate = useNavigate()
+  const [tab, setTab] = useState('leads')
+  const [page, setPage] = useState(0)
+  const pageSize = 10
 
-  const cd = mockCampaignDetail
+  const { data: campaign, loading } = useApi<any>(id ? `/api/campaigns/${id}` : null)
 
-  // If no campaign detail is loaded, show empty state
-  if (!cd) {
-    return (
-      <div className="space-y-5">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/owner/campaigns')} className="p-2 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-          <h1 className="text-2xl font-bold text-white">Campaign Detail</h1>
-        </div>
-        <EmptyState icon={<Rocket className="w-7 h-7" />} title="No campaign selected" description="Select a campaign from the campaigns list to view details." />
-      </div>
-    )
+  if (loading) {
+    return <div className="space-y-5"><div className="h-32 shimmer rounded-2xl" /><div className="h-64 shimmer rounded-2xl" /></div>
   }
 
+  if (!campaign) {
+    return <EmptyState icon={<Rocket className="w-7 h-7" />} title="Campaign not found" description="This campaign may have been deleted." />
+  }
+
+  const c = campaign.campaign || campaign
+  const stats = typeof c.stats === 'string' ? JSON.parse(c.stats || '{}') : c.stats || {}
+  const leadIds = typeof c.leadIds === 'string' ? JSON.parse(c.leadIds || '[]') : c.leadIds || []
+  const steps = typeof c.steps === 'string' ? JSON.parse(c.steps || '[]') : c.steps || []
+  const campaignLeads = campaign.leads || []
+  const statusBadge = campaignStatusBadge(c.status)
+
   const kpis: DashboardKPI[] = [
-    { label: 'Total Leads', value: cd.totalLeads },
-    { label: 'Invites Sent', value: cd.invitesSent },
-    { label: 'Accepted', value: cd.accepted },
-    { label: 'Replied', value: cd.replied },
+    { label: 'Total Leads', value: leadIds.length || campaignLeads.length, icon: 'Users' },
+    { label: 'Sent', value: stats.sent || 0, icon: 'Send' },
+    { label: 'Accepted', value: stats.accepted || 0, icon: 'UserCheck' },
+    { label: 'Replied', value: stats.replied || 0, icon: 'MessageSquare' },
   ]
 
-  const paginated = paginateItems(mockCampaignLeads, page, 10)
-  const b = campaignStatusBadge(cd.status)
+  const paginated = paginateItems(campaignLeads, page, pageSize)
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/owner/campaigns')} className="p-2 rounded-lg text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors">
-          <ArrowLeft className="w-4 h-4" />
-        </button>
-        <div className="flex-1">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-white">{cd.name}</h1>
-            <StatusBadge label={b.label} variant={b.variant} />
-          </div>
-          <p className="text-sm text-zinc-500 mt-1">Created by {cd.createdBy} · Sender: {cd.senderAccount}</p>
-        </div>
-        <div className="flex gap-2">
-          <QuickActionButton icon={<Pause className="w-4 h-4" />} label="Pause" onClick={() => {}} />
-          <QuickActionButton icon={<Copy className="w-4 h-4" />} label="Duplicate" onClick={() => {}} />
-          <QuickActionButton icon={<Trash2 className="w-4 h-4" />} label="Delete" onClick={() => {}} />
-        </div>
-      </div>
+      <PageHeader title={c.name || 'Campaign'} subtitle={`Created ${formatRelativeTime(c.createdAt)}`}>
+        <QuickActionButton icon={<ArrowLeft className="w-4 h-4" />} label="Back" onClick={() => navigate('/owner/campaigns')} />
+        <StatusBadge label={statusBadge.label} variant={statusBadge.variant} />
+        <QuickActionButton
+          icon={c.status === 'active' ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+          label={c.status === 'active' ? 'Pause' : 'Resume'}
+          onClick={() => {}}
+          variant={c.status === 'active' ? undefined : 'primary'}
+        />
+      </PageHeader>
 
-      <PageTabs
-        tabs={[
-          { id: 'overview', label: 'Overview' },
-          { id: 'sequence', label: 'Sequence', count: cd.sequence?.length || 0 },
-          { id: 'leads', label: 'Leads', count: cd.totalLeads },
-          { id: 'logs', label: 'Logs' },
-          { id: 'settings', label: 'Settings' },
-        ]}
-        activeTab={tab} onChange={setTab}
-      />
+      <MetricGrid metrics={kpis} columns={4} accentColor="text-violet-400" />
 
-      {tab === 'overview' && (
-        <div className="space-y-5">
-          <MetricGrid metrics={kpis} columns={4} accentColor="text-violet-400" />
-          {(cd.errors?.length || 0) > 0 && (
-            <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 p-5">
-              <h3 className="text-sm font-semibold text-red-400 mb-3">Recent Errors</h3>
-              {cd.errors.map((e, i) => (
-                <div key={i} className="flex justify-between py-2 border-b border-zinc-800/30 last:border-0">
-                  <span className="text-sm text-zinc-400">{e.message}</span>
-                  <span className="text-xs text-zinc-600">{formatRelativeTime(e.timestamp)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === 'sequence' && (
-        <div className="space-y-3">
-          {(cd.sequence || []).map((step: SequenceStep, i: number) => (
-            <div key={step.id} className="flex items-start gap-4 p-4 rounded-xl bg-zinc-900/60 border border-zinc-800/60">
-              <div className="w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400 text-xs font-bold shrink-0">{i + 1}</div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-white">{step.label}</span>
-                  <span className="text-[10px] text-zinc-600 font-mono uppercase">{step.type}</span>
-                </div>
-                {step.stats && (
-                  <div className="flex gap-4 mt-2 text-xs text-zinc-500">
-                    <span>Sent: {step.stats.sent}</span><span>Delivered: {step.stats.delivered}</span>
-                    <span className="text-emerald-400">Replied: {step.stats.replied}</span><span className="text-red-400">Failed: {step.stats.failed}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {tab === 'leads' && (
-        <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden">
-          <DataTable
-            columns={[
-              { key: 'name', header: 'Lead', render: (l: CampaignLeadRow) => (
-                <div><div className="text-sm text-zinc-200">{l.leadName}</div><div className="text-[11px] text-zinc-500">{l.company}</div></div>
-              )},
-              { key: 'step', header: 'Current Step', render: (l: CampaignLeadRow) => <span className="text-xs text-zinc-400">{l.currentStep}</span> },
-              { key: 'status', header: 'Status', render: (l: CampaignLeadRow) => <StatusBadge label={l.status} variant={l.status === 'completed' ? 'success' : l.status === 'failed' ? 'danger' : l.status === 'replied' ? 'success' : 'info'} /> },
-              { key: 'lastAction', header: 'Last Action', render: (l: CampaignLeadRow) => <span className="text-xs text-zinc-500">{l.lastAction || '—'}</span> },
+      <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden">
+        <div className="px-5 pt-4">
+          <PageTabs
+            tabs={[
+              { id: 'leads', label: 'Leads', count: campaignLeads.length || leadIds.length },
+              { id: 'steps', label: 'Steps', count: steps.length },
+              { id: 'settings', label: 'Settings' },
             ]}
-            data={paginated.data}
-            keyExtractor={(l) => l.id}
+            activeTab={tab} onChange={setTab}
           />
-          <TablePagination page={page} totalPages={paginated.totalPages} total={paginated.total} pageSize={10} onPageChange={setPage} />
         </div>
-      )}
 
-      {tab === 'settings' && (
-        <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 p-5">
-          <InfoList items={[
-            { label: 'Daily Invite Limit', value: cd.dailyInviteLimit },
-            { label: 'Daily Message Limit', value: cd.dailyMessageLimit },
-            { label: 'Active Days', value: (cd.activeDays || []).join(', ') },
-            { label: 'Active Hours', value: `${cd.activeHoursStart} – ${cd.activeHoursEnd}` },
-            { label: 'Stop on Reply', value: cd.stopOnReply ? 'Yes' : 'No' },
-            { label: 'Sender Account', value: cd.senderAccount },
-          ]} />
-        </div>
-      )}
+        {tab === 'leads' && (
+          <>
+            <DataTable
+              columns={[
+                { key: 'name', header: 'Lead', render: (l: any) => (
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center text-xs text-zinc-400">{(l.firstName || l.name || '?')[0]}</div>
+                    <div><div className="text-sm text-zinc-200">{l.firstName || l.name} {l.lastName || ''}</div><div className="text-[11px] text-zinc-500">{l.company || ''}</div></div>
+                  </div>
+                )},
+                { key: 'status', header: 'Status', render: (l: any) => <StatusBadge label={l.status || 'pending'} variant={l.status === 'completed' || l.status === 'replied' ? 'success' : l.status === 'error' ? 'danger' : 'info'} /> },
+                { key: 'step', header: 'Step', render: (l: any) => <span className="text-sm text-zinc-400">{l.currentStep || l.step || 0}/{steps.length || '?'}</span>, className: 'text-center' },
+              ]}
+              data={paginated.data}
+              keyExtractor={(l: any) => l.id || l.leadId}
+            />
+            <TablePagination page={page} totalPages={paginated.totalPages} total={paginated.total} pageSize={pageSize} onPageChange={setPage} />
+          </>
+        )}
 
-      {tab === 'logs' && (
-        <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 p-5">
-          <ActivityTimeline events={mockCampaignLeads.filter(l => l.lastActionAt).map(l => ({
-            id: l.id, title: `${l.leadName} — ${l.lastAction}`, subtitle: l.company, timestamp: l.lastActionAt!,
-          }))} />
-        </div>
-      )}
+        {tab === 'steps' && (
+          <div className="p-5 space-y-3">
+            {steps.length === 0 && <p className="text-sm text-zinc-500 text-center py-4">No steps configured</p>}
+            {steps.map((step: any, i: number) => (
+              <div key={i} className="flex items-start gap-4 p-4 rounded-xl bg-zinc-800/30 border border-zinc-800/40">
+                <div className="w-8 h-8 rounded-full bg-violet-500/20 flex items-center justify-center text-violet-400 text-sm font-bold shrink-0">{i + 1}</div>
+                <div>
+                  <p className="text-sm font-medium text-zinc-200">{step.type || step.action || 'Step'}</p>
+                  <p className="text-xs text-zinc-500 mt-1">{step.template || step.message || step.content || 'No template'}</p>
+                  {step.delay && <p className="text-[11px] text-zinc-600 mt-1">Delay: {step.delay}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab === 'settings' && (
+          <div className="p-5">
+            <div className="space-y-3 text-sm max-w-md">
+              <div className="flex justify-between py-2 border-b border-zinc-800/30"><span className="text-zinc-500">Type</span><span className="text-zinc-300">{c.type || 'connection'}</span></div>
+              <div className="flex justify-between py-2 border-b border-zinc-800/30"><span className="text-zinc-500">Status</span><StatusBadge label={c.status} variant={statusBadge.variant} /></div>
+              <div className="flex justify-between py-2 border-b border-zinc-800/30"><span className="text-zinc-500">Created</span><span className="text-zinc-300">{formatRelativeTime(c.createdAt)}</span></div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

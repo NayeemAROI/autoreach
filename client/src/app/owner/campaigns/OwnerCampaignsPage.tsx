@@ -2,28 +2,30 @@ import { useState } from 'react'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { TableToolbar } from '@/components/shared/SearchInput'
 import { DataTable, TablePagination, RowActionMenu } from '@/components/tables/DataTable'
-import { StatusBadge, HealthBadge } from '@/components/shared/StatusBadge'
+import { StatusBadge } from '@/components/shared/StatusBadge'
 import { EmptyState } from '@/components/shared/Feedback'
-import { mockCampaignSummaries } from '@/data/mock'
+import { useApi } from '@/hooks/useApi'
 import { formatRelativeTime, campaignStatusBadge, filterBySearch, paginateItems } from '@/lib/utils'
-import type { CampaignSummary } from '@/types'
-import { Plus, Eye, Pause, Play, Copy, Archive } from 'lucide-react'
+import { Plus, Pause, Play, Copy, Trash2, Rocket } from 'lucide-react'
 import { QuickActionButton } from '@/components/shared/AlertStrip'
 import { useNavigate } from 'react-router-dom'
 
 export default function OwnerCampaignsPage() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(0)
-  const navigate = useNavigate()
   const pageSize = 10
+  const navigate = useNavigate()
 
-  const filtered = filterBySearch(mockCampaignSummaries, search, ['name', 'senderAccount'])
+  const { data: campData, loading } = useApi<any>('/api/campaigns')
+  const campaigns = campData?.campaigns || []
+
+  const filtered = filterBySearch(campaigns, search, ['name'])
   const paginated = paginateItems(filtered, page, pageSize)
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Campaigns" subtitle={`${mockCampaignSummaries.length} campaigns`}>
-        <QuickActionButton icon={<Plus className="w-4 h-4" />} label="Create Campaign" onClick={() => {}} variant="primary" />
+      <PageHeader title="Campaigns" subtitle={`${campaigns.length} campaigns`}>
+        <QuickActionButton icon={<Plus className="w-4 h-4" />} label="New Campaign" onClick={() => navigate('/campaigns/new/builder')} variant="primary" />
       </PageHeader>
 
       <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/60 overflow-hidden">
@@ -32,29 +34,34 @@ export default function OwnerCampaignsPage() {
         </div>
         <DataTable
           columns={[
-            { key: 'name', header: 'Campaign', render: (c: CampaignSummary) => (
-              <div><div className="text-sm font-medium text-zinc-200">{c.name}</div><div className="text-[11px] text-zinc-500">by {c.createdBy}</div></div>
+            { key: 'name', header: 'Campaign', render: (c: any) => (
+              <div><div className="text-sm font-medium text-zinc-200">{c.name}</div><div className="text-[11px] text-zinc-500">{c.type || 'connection'} sequence</div></div>
             )},
-            { key: 'status', header: 'Status', render: (c: CampaignSummary) => { const b = campaignStatusBadge(c.status); return <StatusBadge label={b.label} variant={b.variant} /> } },
-            { key: 'sender', header: 'Sender', render: (c: CampaignSummary) => <span className="text-xs text-zinc-400">{c.senderAccount}</span> },
-            { key: 'leads', header: 'Leads', render: (c: CampaignSummary) => <span className="text-sm text-zinc-300">{c.leadsInFlow}</span>, className: 'text-center' },
-            { key: 'invites', header: 'Invites', render: (c: CampaignSummary) => <span className="text-sm text-zinc-300">{c.invitesSent}</span>, className: 'text-center' },
-            { key: 'accepted', header: 'Accepted', render: (c: CampaignSummary) => <span className="text-sm text-emerald-400">{c.accepted}</span>, className: 'text-center' },
-            { key: 'replied', header: 'Replied', render: (c: CampaignSummary) => <span className="text-sm text-emerald-400 font-medium">{c.replied}</span>, className: 'text-center' },
-            { key: 'health', header: 'Health', render: (c: CampaignSummary) => <HealthBadge health={c.health} /> },
-            { key: 'actions', header: '', render: (c: CampaignSummary) => (
+            { key: 'status', header: 'Status', render: (c: any) => { const b = campaignStatusBadge(c.status); return <StatusBadge label={b.label} variant={b.variant} /> } },
+            { key: 'leads', header: 'Leads', render: (c: any) => {
+              const leadIds = JSON.parse(c.leadIds || '[]')
+              return <span className="text-sm text-zinc-300">{leadIds.length}</span>
+            }, className: 'text-center' },
+            { key: 'stats', header: 'Sent / Replied', render: (c: any) => {
+              const s = JSON.parse(c.stats || '{}')
+              return <span className="text-sm text-zinc-300">{s.sent || 0} / {s.replied || 0}</span>
+            }, className: 'text-center' },
+            { key: 'created', header: 'Created', render: (c: any) => <span className="text-xs text-zinc-500">{formatRelativeTime(c.createdAt)}</span> },
+            { key: 'actions', header: '', render: (c: any) => (
               <RowActionMenu actions={[
-                { label: 'Open', icon: <Eye className="w-3.5 h-3.5" />, onClick: () => navigate(`/owner/campaigns/${c.id}`) },
                 { label: c.status === 'active' ? 'Pause' : 'Resume', icon: c.status === 'active' ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />, onClick: () => {} },
                 { label: 'Duplicate', icon: <Copy className="w-3.5 h-3.5" />, onClick: () => {} },
-                { label: 'Archive', icon: <Archive className="w-3.5 h-3.5" />, onClick: () => {}, variant: 'danger' },
+                { label: 'Delete', icon: <Trash2 className="w-3.5 h-3.5" />, onClick: () => {}, variant: 'danger' as const },
               ]} />
             ), className: 'w-10' },
           ]}
           data={paginated.data}
-          keyExtractor={(c) => c.id}
-          onRowClick={(c) => navigate(`/owner/campaigns/${c.id}`)}
+          keyExtractor={(c: any) => c.id}
+          onRowClick={(c: any) => navigate(`/owner/campaigns/${c.id}`)}
         />
+        {campaigns.length === 0 && !loading && (
+          <EmptyState icon={<Rocket className="w-7 h-7" />} title="No campaigns yet" description="Create your first campaign to start outreach." />
+        )}
         <TablePagination page={page} totalPages={paginated.totalPages} total={paginated.total} pageSize={pageSize} onPageChange={setPage} />
       </div>
     </div>
